@@ -1,3 +1,4 @@
+import 'dart:math' as math; // ADDED for rotation math
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -8,10 +9,9 @@ enum FilterType { all, halts, gaps }
 
 abstract class TrackItem {
   final GlobalKey key = GlobalKey();
-  DateTime get primaryTime; // Used for chronological sorting
+  DateTime get primaryTime; 
 }
 
-// Added StartEvent model
 class StartEvent extends TrackItem {
   final LatLng location;
   final DateTime time;
@@ -20,7 +20,6 @@ class StartEvent extends TrackItem {
   DateTime get primaryTime => time;
 }
 
-// Added StopEvent model
 class StopEvent extends TrackItem {
   final LatLng location;
   final DateTime time;
@@ -73,7 +72,6 @@ class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  // FIX: This must be true, otherwise the SegmentedButton won't update visually when you click it!
   bool shouldRebuild(covariant _StickyHeaderDelegate oldDelegate) => true; 
 }
 
@@ -117,7 +115,6 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     DateTime? lastTime;
     LatLng? lastLoc;
 
-    // PASS 1: Extract all points and Gaps
     for (var i = 0; i < response.length; i++) {
       var row = response[i];
       LatLng currentLoc = LatLng(row['latitude'], row['longitude']);
@@ -139,7 +136,6 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
       lastLoc = currentLoc;
     }
 
-    // PASS 2: Buffer Halts
     List<TrackItem> processedItems = [];
     List<TrackItem> buffer = [];
     LatLng? currentCenter;
@@ -184,18 +180,14 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     }
     flushBuffer(); 
 
-    // Sort chronologically
     processedItems.sort((a, b) => a.primaryTime.compareTo(b.primaryTime));
 
-    // NEW: Inject Start and Stop events at the edges of the timeline
     if (routePoints.isNotEmpty && rawTimeline.isNotEmpty) {
-      // Add Start Event
       processedItems.insert(0, StartEvent(
         location: routePoints.first,
         time: rawTimeline.first.primaryTime,
       ));
       
-      // Add Stop Event (if trip has more than 1 point)
       if (routePoints.length > 1) {
         processedItems.add(StopEvent(
           location: routePoints.last,
@@ -209,6 +201,49 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
       rawRoute = routePoints;
       isLoading = false;
     });
+  }
+
+  // --- NEW METHOD: Generates directional arrows along the route ---
+// --- UPDATED METHOD: Generates an arrow exactly in between every 2 points ---
+  List<Marker> _generateArrowMarkers() {
+    List<Marker> arrows = [];
+    if (rawRoute.length < 2) return arrows;
+
+    final Distance distanceCalc = const Distance();
+
+    for (int i = 0; i < rawRoute.length - 1; i++) {
+      LatLng p1 = rawRoute[i];
+      LatLng p2 = rawRoute[i + 1];
+      
+      // Skip if the points are identical to avoid zero-distance errors
+      if (p1.latitude == p2.latitude && p1.longitude == p2.longitude) continue;
+
+      // Calculate the angle from p1 to p2
+      double bearing = distanceCalc.bearing(p1, p2);
+      
+      // Calculate the exact midpoint between p1 and p2
+      LatLng midPoint = LatLng(
+        (p1.latitude + p2.latitude) / 2,
+        (p1.longitude + p2.longitude) / 2,
+      );
+      
+      arrows.add(
+        Marker(
+          point: midPoint, // Placed exactly in the middle of the segment
+          width: 16, 
+          height: 16,
+          child: Transform.rotate(
+            angle: bearing * math.pi / 180, // Convert bearing to radians
+            child: const Icon(
+              Icons.navigation, 
+              color: Colors.white, 
+              size: 14, // Small arrow size
+            ),
+          ),
+        ),
+      );
+    }
+    return arrows;
   }
 
   void _onPointTapped(TrackItem item) {
@@ -245,7 +280,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     List<TrackItem> filteredList = finalItems.where((item) {
       if (currentFilter == FilterType.halts) return item is HaltEvent;
       if (currentFilter == FilterType.gaps) return item is TimeGap;
-      return true; // FilterType.all shows Start/Stop/Location/Gaps/Halts
+      return true; 
     }).toList();
 
     return Scaffold(
@@ -269,9 +304,15 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
                   Polyline(points: rawRoute, color: Colors.blueAccent, strokeWidth: 8.0),
                 ],
               ),
+              
+              // --- ARROWS LAYER (Placed BELOW the interactive points) ---
+              MarkerLayer(
+                markers: _generateArrowMarkers(),
+              ),
+
+              // --- MAIN INTERACTIVE MARKERS LAYER ---
               MarkerLayer(
                 markers: finalItems.map((item) {
-                  // Setup custom markers based on type
                   Widget markerIcon;
                   LatLng markerPoint;
 
@@ -353,7 +394,6 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
                 child: CustomScrollView(
                   controller: scrollController,
                   slivers: [
-                    // 1. THE STICKY HEADER
                     SliverPersistentHeader(
                       pinned: true,
                       delegate: _StickyHeaderDelegate(
@@ -389,7 +429,6 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
                       ),
                     ),
 
-                    // 2. THE SCROLLABLE LIST
                     SliverList(
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
