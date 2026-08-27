@@ -3,6 +3,81 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// --- DATA MODELS ---
+enum FilterType { all, halts, gaps }
+
+abstract class TrackItem {
+  final GlobalKey key = GlobalKey();
+  DateTime get primaryTime; // Used for chronological sorting
+}
+
+// Added StartEvent model
+class StartEvent extends TrackItem {
+  final LatLng location;
+  final DateTime time;
+  StartEvent({required this.location, required this.time});
+  @override
+  DateTime get primaryTime => time;
+}
+
+// Added StopEvent model
+class StopEvent extends TrackItem {
+  final LatLng location;
+  final DateTime time;
+  StopEvent({required this.location, required this.time});
+  @override
+  DateTime get primaryTime => time;
+}
+
+class LocationPoint extends TrackItem {
+  final LatLng location;
+  final DateTime time;
+  LocationPoint({required this.location, required this.time});
+  @override
+  DateTime get primaryTime => time;
+}
+
+class HaltEvent extends TrackItem {
+  final LatLng location;
+  final DateTime startTime;
+  final DateTime endTime;
+  HaltEvent({required this.location, required this.startTime, required this.endTime});
+  @override
+  DateTime get primaryTime => startTime;
+}
+
+class TimeGap extends TrackItem {
+  final LatLng lastKnownLocation;
+  final DateTime startTime;
+  final DateTime endTime;
+  TimeGap({required this.lastKnownLocation, required this.startTime, required this.endTime});
+  @override
+  DateTime get primaryTime => startTime;
+}
+
+// --- DELEGATE FOR STICKY DRAGGABLE HEADER ---
+class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final double height;
+  final Widget child;
+
+  _StickyHeaderDelegate({required this.height, required this.child});
+
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return SizedBox(height: height, child: child);
+  }
+
+  @override
+  // FIX: This must be true, otherwise the SegmentedButton won't update visually when you click it!
+  bool shouldRebuild(covariant _StickyHeaderDelegate oldDelegate) => true; 
+}
+
+// --- MAIN SCREEN ---
 class MapMonitorScreen extends StatefulWidget {
   final String userId;
   final String sessionId;
@@ -15,8 +90,12 @@ class MapMonitorScreen extends StatefulWidget {
 
 class _MapMonitorScreenState extends State<MapMonitorScreen> {
   final _supabase = Supabase.instance.client;
-  List<LatLng> routePoints = [];
-  List<Marker> markers = [];
+  final MapController _mapController = MapController();
+  
+  List<TrackItem> finalItems = [];
+  List<LatLng> rawRoute = [];
+  FilterType currentFilter = FilterType.all;
+  TrackItem? selectedItem;
   bool isLoading = true;
 
   @override
@@ -33,77 +112,353 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
         .eq('session_id', widget.sessionId)
         .order('timestamp', ascending: true);
 
-    List<LatLng> points = [];
-    DateTime? haltStartTime;
-    LatLng? potentialHalt;
+    List<TrackItem> rawTimeline = [];
+    List<LatLng> routePoints = [];
     DateTime? lastTime;
+    LatLng? lastLoc;
 
+    // PASS 1: Extract all points and Gaps
     for (var i = 0; i < response.length; i++) {
       var row = response[i];
       LatLng currentLoc = LatLng(row['latitude'], row['longitude']);
       DateTime currentTime = DateTime.parse(row['timestamp']);
-      points.add(currentLoc);
+      
+      routePoints.add(currentLoc);
 
-      // 1. GAP ALERT: Missing location for > 5 minutes
       if (lastTime != null && currentTime.difference(lastTime).inMinutes > 5) {
-        markers.add(Marker(
-          point: currentLoc,
-          child: const Icon(Icons.warning, color: Colors.red, size: 30),
+        rawTimeline.add(TimeGap(
+          startTime: lastTime,
+          endTime: currentTime,
+          lastKnownLocation: lastLoc!,
         ));
       }
+      
+      rawTimeline.add(LocationPoint(location: currentLoc, time: currentTime));
+      
       lastTime = currentTime;
+      lastLoc = currentLoc;
+    }
 
-      // 2. HALT ALERT: Stopped for > 1 hour
-      if (potentialHalt == null) {
-        potentialHalt = currentLoc;
-        haltStartTime = currentTime;
+    // PASS 2: Buffer Halts
+    List<TrackItem> processedItems = [];
+    List<TrackItem> buffer = [];
+    LatLng? currentCenter;
+
+    void flushBuffer() {
+      if (buffer.isEmpty) return;
+      
+      var locs = buffer.whereType<LocationPoint>().toList();
+      var gaps = buffer.whereType<TimeGap>().toList();
+
+      if (locs.isNotEmpty && locs.last.time.difference(locs.first.time).inMinutes >= 15) {
+        processedItems.add(HaltEvent(
+          location: locs.first.location,
+          startTime: locs.first.time,
+          endTime: locs.last.time,
+        ));
+        processedItems.addAll(gaps); 
       } else {
-        // Rough distance logic (Manhattan distance for speed)
-        double distance = (currentLoc.latitude - potentialHalt.latitude).abs() + 
-                          (currentLoc.longitude - potentialHalt.longitude).abs();
-        
-        if (distance < 0.001) { // Same rough area
-          if (currentTime.difference(haltStartTime!).inHours >= 1) {
-            markers.add(Marker(
-              point: currentLoc,
-              child: const Icon(Icons.stop_circle, color: Colors.orange, size: 30),
-            ));
+        processedItems.addAll(buffer);
+      }
+      buffer.clear();
+    }
+
+    for (var item in rawTimeline) {
+      if (item is TimeGap) {
+        buffer.add(item); 
+      } else if (item is LocationPoint) {
+        if (currentCenter == null) {
+          currentCenter = item.location;
+          buffer.add(item);
+        } else {
+          double distanceMeters = const Distance().distance(currentCenter, item.location);
+          if (distanceMeters <= 100) {
+            buffer.add(item); 
+          } else {
+            flushBuffer(); 
+            currentCenter = item.location;
+            buffer.add(item);
           }
-        } else { // Moved away, reset halt monitor
-          potentialHalt = currentLoc;
-          haltStartTime = currentTime;
         }
+      }
+    }
+    flushBuffer(); 
+
+    // Sort chronologically
+    processedItems.sort((a, b) => a.primaryTime.compareTo(b.primaryTime));
+
+    // NEW: Inject Start and Stop events at the edges of the timeline
+    if (routePoints.isNotEmpty && rawTimeline.isNotEmpty) {
+      // Add Start Event
+      processedItems.insert(0, StartEvent(
+        location: routePoints.first,
+        time: rawTimeline.first.primaryTime,
+      ));
+      
+      // Add Stop Event (if trip has more than 1 point)
+      if (routePoints.length > 1) {
+        processedItems.add(StopEvent(
+          location: routePoints.last,
+          time: rawTimeline.last.primaryTime,
+        ));
       }
     }
 
     setState(() {
-      routePoints = points;
+      finalItems = processedItems;
+      rawRoute = routePoints;
       isLoading = false;
     });
+  }
+
+  void _onPointTapped(TrackItem item) {
+    setState(() {
+      selectedItem = item;
+      currentFilter = FilterType.all; 
+    });
+    
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (item.key.currentContext != null) {
+        Scrollable.ensureVisible(
+          item.key.currentContext!,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOut,
+          alignment: 0.5,
+        );
+      }
+    });
+  }
+
+  void _onListItemTapped(TrackItem item, LatLng mapLocation) {
+    setState(() => selectedItem = item);
+    _mapController.move(mapLocation, 16.0);
+  }
+
+  String formatTime(DateTime d) {
+    return "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
   }
 
   @override
   Widget build(BuildContext context) {
     if (isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
+    List<TrackItem> filteredList = finalItems.where((item) {
+      if (currentFilter == FilterType.halts) return item is HaltEvent;
+      if (currentFilter == FilterType.gaps) return item is TimeGap;
+      return true; // FilterType.all shows Start/Stop/Location/Gaps/Halts
+    }).toList();
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Travel Map (Free OSM)')),
-      body: FlutterMap(
-        options: MapOptions(
-          initialCenter: routePoints.isNotEmpty ? routePoints.first : const LatLng(0, 0),
-          initialZoom: 14.0,
-        ),
+      appBar: AppBar(title: const Text('Travel Route & Details')),
+      body: Stack(
         children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.your.app', // REQUIRED by OSM policy
-          ),
-          PolylineLayer(
-            polylines: [
-              Polyline(points: routePoints, color: Colors.blue, strokeWidth: 5.0),
+          // --- THE MAP ---
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: rawRoute.isNotEmpty ? rawRoute.first : const LatLng(0, 0),
+              initialZoom: 14.0,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.attendance_tracker',
+              ),
+              PolylineLayer(
+                polylines: [
+                  Polyline(points: rawRoute, color: Colors.blueAccent, strokeWidth: 8.0),
+                ],
+              ),
+              MarkerLayer(
+                markers: finalItems.map((item) {
+                  // Setup custom markers based on type
+                  Widget markerIcon;
+                  LatLng markerPoint;
+
+                  if (item is StartEvent) {
+                    markerIcon = const Icon(Icons.play_circle_fill, color: Colors.green, size: 35);
+                    markerPoint = item.location;
+                  } else if (item is StopEvent) {
+                    markerIcon = const Icon(Icons.flag_circle, color: Colors.red, size: 35);
+                    markerPoint = item.location;
+                  } else if (item is TimeGap) {
+                    markerIcon = const Icon(Icons.warning, color: Colors.red, size: 35);
+                    markerPoint = item.lastKnownLocation;
+                  } else if (item is HaltEvent) {
+                    markerIcon = const Icon(Icons.stop_circle, color: Colors.orange, size: 35);
+                    markerPoint = item.location;
+                  } else {
+                    markerIcon = Container(
+                      decoration: BoxDecoration(
+                        color: selectedItem == item ? Colors.black.withOpacity(0.3) : Colors.transparent,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.circle, color: selectedItem == item ? Colors.white : Colors.blue[900]!, size: selectedItem == item ? 20 : 12),
+                    );
+                    markerPoint = (item as LocationPoint).location;
+                  }
+
+                  return Marker(
+                    point: markerPoint,
+                    width: 40, height: 40,
+                    child: GestureDetector(
+                      onTap: () => _onPointTapped(item),
+                      child: markerIcon,
+                    ),
+                  );
+                }).toList(),
+              ),
             ],
           ),
-          MarkerLayer(markers: markers),
+
+          // --- FLOATING TIME DISPLAY ---
+          if (selectedItem != null)
+            Positioned(
+              top: 20, left: 20, right: 20,
+              child: Card(
+                color: Colors.blue[900],
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Center(
+                    child: Text(
+                      selectedItem is TimeGap 
+                        ? "Signal Lost: ${formatTime((selectedItem as TimeGap).startTime)} - ${formatTime((selectedItem as TimeGap).endTime)}"
+                        : selectedItem is HaltEvent 
+                          ? "Halted: ${formatTime((selectedItem as HaltEvent).startTime)} - ${formatTime((selectedItem as HaltEvent).endTime)}"
+                          : selectedItem is StartEvent
+                            ? "Trip Started at ${formatTime((selectedItem as StartEvent).time)}"
+                            : selectedItem is StopEvent
+                              ? "Trip Ended at ${formatTime((selectedItem as StopEvent).time)}"
+                              : "Location at ${formatTime((selectedItem as LocationPoint).time)}",
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // --- SLIDING BOTTOM PANEL WITH CUSTOM SCROLL VIEW ---
+          DraggableScrollableSheet(
+            initialChildSize: 0.3,
+            minChildSize: 0.1,
+            maxChildSize: 0.6,
+            builder: (BuildContext context, ScrollController scrollController) {
+              return Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, spreadRadius: 2)],
+                ),
+                child: CustomScrollView(
+                  controller: scrollController,
+                  slivers: [
+                    // 1. THE STICKY HEADER
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _StickyHeaderDelegate(
+                        height: 120, 
+                        child: Container(
+                          color: Colors.white, 
+                          child: Column(
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(top: 10, bottom: 10),
+                                width: 50, height: 5,
+                                decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(10)),
+                              ),
+                              const Text("Timeline Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 10),
+                                child: SegmentedButton<FilterType>(
+                                  segments: const [
+                                    ButtonSegment(value: FilterType.all, label: Text('All')),
+                                    ButtonSegment(value: FilterType.halts, label: Text('Halts')),
+                                    ButtonSegment(value: FilterType.gaps, label: Text('Gaps')),
+                                  ],
+                                  selected: {currentFilter},
+                                  onSelectionChanged: (Set<FilterType> newSelection) {
+                                    setState(() => currentFilter = newSelection.first);
+                                  },
+                                ),
+                              ),
+                              const Divider(height: 1),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // 2. THE SCROLLABLE LIST
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final item = filteredList[index];
+
+                          if (item is StartEvent) {
+                            return ListTile(
+                              key: item.key,
+                              tileColor: Colors.green[50],
+                              leading: const Icon(Icons.play_circle_fill, color: Colors.green),
+                              title: Text("Trip Started", style: TextStyle(color: Colors.green[800], fontWeight: FontWeight.bold)),
+                              subtitle: Text("At ${formatTime(item.time)}"),
+                              onTap: () => _onListItemTapped(item, item.location),
+                            );
+                          }
+
+                          if (item is StopEvent) {
+                            return ListTile(
+                              key: item.key,
+                              tileColor: Colors.red[50],
+                              leading: const Icon(Icons.flag_circle, color: Colors.red),
+                              title: Text("Trip Ended", style: TextStyle(color: Colors.red[800], fontWeight: FontWeight.bold)),
+                              subtitle: Text("At ${formatTime(item.time)}"),
+                              onTap: () => _onListItemTapped(item, item.location),
+                            );
+                          }
+
+                          if (item is TimeGap) {
+                            return ListTile(
+                              key: item.key,
+                              tileColor: Colors.red[50],
+                              leading: const Icon(Icons.warning, color: Colors.red),
+                              title: Text("No Signal / App Closed", style: TextStyle(color: Colors.red[800], fontWeight: FontWeight.bold)),
+                              subtitle: Text("From ${formatTime(item.startTime)} to ${formatTime(item.endTime)}"),
+                              onTap: () => _onListItemTapped(item, item.lastKnownLocation),
+                            );
+                          }
+
+                          if (item is HaltEvent) {
+                            return ListTile(
+                              key: item.key,
+                              tileColor: Colors.orange[50],
+                              leading: const Icon(Icons.stop_circle, color: Colors.orange),
+                              title: Text("Halt (Merged)", style: TextStyle(color: Colors.orange[900], fontWeight: FontWeight.bold)),
+                              subtitle: Text("From ${formatTime(item.startTime)} to ${formatTime(item.endTime)}"),
+                              onTap: () => _onListItemTapped(item, item.location),
+                            );
+                          }
+
+                          if (item is LocationPoint) {
+                            return ListTile(
+                              key: item.key,
+                              tileColor: selectedItem == item ? Colors.blue[100] : Colors.white,
+                              leading: const Icon(Icons.my_location, color: Colors.blue),
+                              title: Text(formatTime(item.time), style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: const Text("Moving"),
+                              onTap: () => _onListItemTapped(item, item.location),
+                            );
+                          }
+                          return const SizedBox();
+                        },
+                        childCount: filteredList.length,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          )
         ],
       ),
     );

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'map_monitor_screen.dart';
 
@@ -14,30 +16,37 @@ class UserTracksScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text('$userName\'s Tracks')),
+      backgroundColor: Colors.grey[100], // Slight background color to make cards pop
       body: FutureBuilder(
-        future: supabase.from('location_tracks').select('session_id, timestamp').eq('user_id', userId).order('timestamp', ascending: false),
+        // We now fetch latitude and longitude to draw the preview map
+        future: supabase
+            .from('location_tracks')
+            .select('session_id, timestamp, latitude, longitude')
+            .eq('user_id', userId)
+            .order('timestamp', ascending: true),
         builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           
-          // Group sessions and find the START date/time of each session
-          Map<String, DateTime> sessionDates = {};
-          
+          // Group all data points by session_id
+          Map<String, List<Map<String, dynamic>>> sessionData = {};
           for (var row in snapshot.data!) {
             String sId = row['session_id'];
-            DateTime time = DateTime.parse(row['timestamp']);
-            
-            // Keep the earliest time for the session to show when they clicked "Start"
-            if (!sessionDates.containsKey(sId) || time.isBefore(sessionDates[sId]!)) {
-               sessionDates[sId] = time;
+            if (!sessionData.containsKey(sId)) {
+              sessionData[sId] = [];
             }
+            sessionData[sId]!.add(row);
           }
           
-          // Sort the sessions so the most recent track is at the top
-          List<MapEntry<String, DateTime>> sortedSessions = sessionDates.entries.toList()
-            ..sort((a, b) => b.value.compareTo(a.value));
+          // Sort sessions so the most recent is at the top
+          List<MapEntry<String, List<Map<String, dynamic>>>> sortedSessions = sessionData.entries.toList()
+            ..sort((a, b) {
+              DateTime timeA = DateTime.parse(a.value.first['timestamp']);
+              DateTime timeB = DateTime.parse(b.value.first['timestamp']);
+              return timeB.compareTo(timeA);
+            });
 
           if (sortedSessions.isEmpty) {
-            return Center(child: Text("$userName hasn't recorded any tracks yet.", style: const TextStyle(fontSize: 16)));
+            return Center(child: Text("$userName hasn't recorded any tracks yet."));
           }
 
           return ListView.builder(
@@ -45,28 +54,109 @@ class UserTracksScreen extends StatelessWidget {
             itemCount: sortedSessions.length,
             itemBuilder: (context, index) {
               final session = sortedSessions[index];
-              final date = session.value;
+              final pointsData = session.value;
+
+              // 1. Calculate Times
+              final start = DateTime.parse(pointsData.first['timestamp']);
+              final end = DateTime.parse(pointsData.last['timestamp']);
+              final duration = end.difference(start);
+
+              // 2. Format Dates & Times
+              String formatDate(DateTime d) => "${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}";
+              String formatTime(DateTime d) => "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
+
+              String startStr = "${formatDate(start)} at ${formatTime(start)}";
               
-              // Format Date manually (e.g., "27/8/2026 at 10:05")
-              final minute = date.minute.toString().padLeft(2, '0');
-              final formattedDate = "${date.day}/${date.month}/${date.year}";
-              final formattedTime = "${date.hour}:$minute";
+              // Only show the End Date if it is different from the Start Date
+              String endStr = formatTime(end);
+              if (start.day != end.day || start.month != end.month || start.year != end.year) {
+                endStr = "${formatDate(end)} at $endStr";
+              }
+
+              String durationStr = "${duration.inHours}h ${duration.inMinutes.remainder(60)}m worked";
+
+              // 3. Extract Route Points for the Preview Map
+              List<LatLng> route = pointsData
+                  .map((p) => LatLng(p['latitude'], p['longitude']))
+                  .toList();
 
               return Card(
-                elevation: 2,
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.green,
-                    child: Icon(Icons.map, color: Colors.white),
-                  ),
-                  title: Text(formattedDate, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  subtitle: Text('Started at $formattedTime'),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                elevation: 4,
+                clipBehavior: Clip.antiAlias, // Ensures the map respects the card's rounded corners
+                margin: const EdgeInsets.only(bottom: 15),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                child: InkWell(
                   onTap: () => Navigator.push(context, MaterialPageRoute(
                     builder: (_) => MapMonitorScreen(userId: userId, sessionId: session.key)
                   )),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // --- MAP PREVIEW SECTION ---
+                      SizedBox(
+                        height: 130, // Small preview height
+                        width: double.infinity,
+                        child: IgnorePointer(
+                          // IgnorePointer prevents the map from stealing scrolls from the ListView
+                          child: FlutterMap(
+                            options: MapOptions(
+                              initialCenter: route.isNotEmpty ? route.first : const LatLng(0, 0),
+                              initialZoom: 13.0,
+                              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none), // Disable zooming/panning
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                userAgentPackageName: 'com.example.attendance_tracker',
+                              ),
+                              PolylineLayer(
+                                polylines: [
+                                  Polyline(points: route, color: Colors.blue, strokeWidth: 4.0),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // --- DETAILS SECTION ---
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  durationStr, 
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)
+                                ),
+                                const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                              ],
+                            ),
+                            const Divider(),
+                            const SizedBox(height: 5),
+                            Row(
+                              children: [
+                                const Icon(Icons.play_circle_fill, color: Colors.green, size: 20),
+                                const SizedBox(width: 8),
+                                Text("Start: $startStr"),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                const Icon(Icons.stop_circle, color: Colors.red, size: 20),
+                                const SizedBox(width: 8),
+                                Text("End:   $endStr"),
+                              ],
+                            ),
+                          ],
+                        ),
+                      )
+                    ],
+                  ),
                 ),
               );
             },
