@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../core/sync_service.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../core/sync_service.dart';
 
 class TrackerScreen extends StatefulWidget {
   const TrackerScreen({Key? key}) : super(key: key);
@@ -26,45 +26,76 @@ class _TrackerScreenState extends State<TrackerScreen> {
     setState(() {});
   }
 
-  // Make sure this is at the top of your file:
-// import 'package:permission_handler/permission_handler.dart';
+  Future<void> _showSettingsDialog(String title, String message, VoidCallback onConfirm) async {
+    return showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onConfirm(); 
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _toggleTracking() async {
     final service = FlutterBackgroundService();
     
+    // STOP TRACKING
     if (isTracking) {
       service.invoke("stopService");
       SyncService().syncOfflineData();
-    } else {
-      // 1. Request Notification Permission
-      await Permission.notification.request();
-
-      // 2. Request "While In Use" (Foreground) Location FIRST
-      var foregroundStatus = await Permission.locationWhenInUse.request();
-      
-      if (foregroundStatus.isGranted) {
-        // 3. Request "Allow All The Time" (Background) Location SECOND
-        var backgroundStatus = await Permission.locationAlways.request();
-        
-        if (!backgroundStatus.isGranted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Warning: Background tracking will stop if you close the app.')),
-          );
-        }
-        
-        // Start the service regardless, it will at least work in the foreground
-        await service.startService();
-        
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location permission is required to start tracking.')),
-        );
-        await openAppSettings(); // Take them to settings if they denied it
-        return;
-      }
-    }
+      setState(() => isTracking = false);
+      return;
+    } 
     
-    setState(() => isTracking = !isTracking);
+    // START TRACKING CHECKS
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      await _showSettingsDialog(
+        'Location is Disabled',
+        'Please turn on your device GPS/Location Services to start tracking.',
+        () => Geolocator.openLocationSettings(),
+      );
+      return; 
+    }
+
+    await Permission.notification.request();
+
+    var foregroundStatus = await Permission.locationWhenInUse.request();
+    if (!foregroundStatus.isGranted) {
+      await _showSettingsDialog(
+        'Permission Required',
+        'Location permission is required to start tracking.',
+        () => openAppSettings(),
+      );
+      return;
+    }
+
+    var backgroundStatus = await Permission.locationAlways.request();
+    if (!backgroundStatus.isGranted) {
+      await _showSettingsDialog(
+        'Background Location Required',
+        'To track your route accurately even when the app is closed, please select "Allow all the time" in the App Settings.',
+        () => openAppSettings(),
+      );
+      return;
+    }
+
+    // Start the Background Service
+    await service.startService();
+    setState(() => isTracking = true);
   }
 
   @override
