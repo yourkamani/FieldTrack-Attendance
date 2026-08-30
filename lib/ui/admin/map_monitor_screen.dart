@@ -1,8 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -10,130 +7,12 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// =====================================================================
-// DATA MODELS
-// =====================================================================
-enum FilterType { all, halts, gaps }
+import '../../models/track_models.dart';
+import '../../widgets/marker_icon_factory.dart';
+import '../../widgets/route_narrative.dart';
+import '../../widgets/playback_bar.dart';
+import '../../widgets/timeline_widgets.dart';
 
-abstract class TrackItem {
-  final GlobalKey key = GlobalKey();
-  DateTime get primaryTime;
-}
-
-class StartEvent extends TrackItem {
-  final LatLng location;
-  final DateTime time;
-  StartEvent({required this.location, required this.time});
-  @override
-  DateTime get primaryTime => time;
-}
-
-class StopEvent extends TrackItem {
-  final LatLng location;
-  final DateTime time;
-  StopEvent({required this.location, required this.time});
-  @override
-  DateTime get primaryTime => time;
-}
-
-class LocationPoint extends TrackItem {
-  final LatLng location;
-  final DateTime time;
-  LocationPoint({required this.location, required this.time});
-  @override
-  DateTime get primaryTime => time;
-}
-
-/// A halt is a merged region (not a run of individual dots). It carries a
-/// sequential number shown on the map + a lazily-resolved area name
-/// ("Kurla", "Mulund", etc.) fetched via reverse geocoding.
-class HaltEvent extends TrackItem {
-  final LatLng location;
-  final DateTime startTime;
-  final DateTime endTime;
-  final int haltNumber;
-  String? areaName; // filled in after reverse geocoding resolves
-  bool isResolvingArea = false;
-
-  HaltEvent({
-    required this.location,
-    required this.startTime,
-    required this.endTime,
-    required this.haltNumber,
-  });
-
-  Duration get duration => endTime.difference(startTime);
-
-  @override
-  DateTime get primaryTime => startTime;
-}
-
-class TimeGap extends TrackItem {
-  final LatLng lastKnownLocation;
-  final DateTime startTime;
-  final DateTime endTime;
-  TimeGap({required this.lastKnownLocation, required this.startTime, required this.endTime});
-  @override
-  DateTime get primaryTime => startTime;
-}
-
-// =====================================================================
-// STICKY HEADER DELEGATE
-// =====================================================================
-class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
-  final double height;
-  final Widget child;
-  _StickyHeaderDelegate({required this.height, required this.child});
-
-  @override
-  double get minExtent => height;
-  @override
-  double get maxExtent => height;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return SizedBox(height: height, child: child);
-  }
-
-  @override
-  bool shouldRebuild(covariant _StickyHeaderDelegate oldDelegate) => true;
-}
-
-// =====================================================================
-// GEO MATH HELPERS (replaces latlong2's Distance())
-// =====================================================================
-class _GeoUtils {
-  static const double _earthRadius = 6371000; // meters
-
-  static double _rad(double deg) => deg * math.pi / 180;
-
-  static double distanceMeters(LatLng a, LatLng b) {
-    final dLat = _rad(b.latitude - a.latitude);
-    final dLng = _rad(b.longitude - a.longitude);
-    final lat1 = _rad(a.latitude);
-    final lat2 = _rad(b.latitude);
-
-    final h = math.pow(math.sin(dLat / 2), 2) +
-        math.cos(lat1) * math.cos(lat2) * math.pow(math.sin(dLng / 2), 2);
-    final c = 2 * math.atan2(math.sqrt(h), math.sqrt(1 - h));
-    return _earthRadius * c;
-  }
-
-  static double bearingDegrees(LatLng a, LatLng b) {
-    final lat1 = _rad(a.latitude);
-    final lat2 = _rad(b.latitude);
-    final dLng = _rad(b.longitude - a.longitude);
-
-    final y = math.sin(dLng) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
-    final bearing = math.atan2(y, x) * 180 / math.pi;
-    return (bearing + 360) % 360;
-  }
-}
-
-// =====================================================================
-// MAIN SCREEN
-// =====================================================================
 class MapMonitorScreen extends StatefulWidget {
   final String userId;
   final String sessionId;
@@ -147,24 +26,17 @@ class MapMonitorScreen extends StatefulWidget {
 class _MapMonitorScreenState extends State<MapMonitorScreen> {
   final _supabase = Supabase.instance.client;
   GoogleMapController? _mapController;
+  final _icons = MarkerIconFactory();
 
   // Timeline / map data
   List<TrackItem> finalItems = [];
   List<LatLng> rawRoute = [];
   List<LocationPoint> fullTrajectory = []; // every raw point + time, used for playback interpolation
+  List<HaltEvent> _halts = [];
+  List<List<LatLng>> _movingSegments = []; // polyline pieces, broken around halt regions
   FilterType currentFilter = FilterType.all;
   TrackItem? selectedItem;
   bool isLoading = true;
-
-  // Marker bitmap caches (Google Maps only accepts BitmapDescriptor, not raw widgets)
-  BitmapDescriptor? _startIcon;
-  BitmapDescriptor? _stopIcon;
-  BitmapDescriptor? _gapIcon;
-  BitmapDescriptor? _dotIcon;
-  BitmapDescriptor? _dotIconSelected;
-  BitmapDescriptor? _walkerIcon;
-  final Map<int, BitmapDescriptor> _haltIcons = {}; // keyed by halt number
-  final Map<int, BitmapDescriptor> _arrowIcons = {}; // keyed by bearing rounded to nearest 15deg
 
   // Playback / "summary walk-through" state
   bool _summaryMode = false;
@@ -181,7 +53,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
   @override
   void initState() {
     super.initState();
-    _buildStaticIcons().then((_) => _fetchRouteData());
+    _icons.buildStaticIcons().then((_) => _fetchRouteData());
   }
 
   @override
@@ -257,7 +129,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
           currentCenter = item.location;
           buffer.add(item);
         } else {
-          double distanceMeters = _GeoUtils.distanceMeters(currentCenter, item.location);
+          double distanceMeters = GeoUtils.distanceMeters(currentCenter, item.location);
           if (distanceMeters <= 100) {
             buffer.add(item);
           } else {
@@ -279,61 +151,92 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
       }
     }
 
+    final halts = processedItems.whereType<HaltEvent>().toList();
+
     setState(() {
       finalItems = processedItems;
       rawRoute = routePoints;
       fullTrajectory = trajectory;
+      _halts = halts;
+      _movingSegments = _buildMovingSegments(trajectory, halts);
       isLoading = false;
     });
 
-    await _buildHaltIcons();
-    _resolveHaltAreaNames(); // fire and forget, updates UI as results come in
+    for (final h in halts) {
+      await _icons.haltIcon(h.haltNumber);
+    }
+    if (mounted) setState(() {}); // repaint markers now that numbered halt icons exist
+
+    _resolveAllAreaNames(); // fire and forget, updates UI as results arrive
+  }
+
+  /// Breaks the route into segments that stop right before a halt region
+  /// and resume right after it, so the polyline never draws through a
+  /// halt — the numbered circle represents that stretch instead.
+  List<List<LatLng>> _buildMovingSegments(List<LocationPoint> trajectory, List<HaltEvent> halts) {
+    bool inHalt(DateTime t) => halts.any((h) => !t.isBefore(h.startTime) && !t.isAfter(h.endTime));
+
+    final segments = <List<LatLng>>[];
+    var current = <LatLng>[];
+    for (final p in trajectory) {
+      if (inHalt(p.time)) {
+        if (current.length > 1) segments.add(List.of(current));
+        current = [];
+      } else {
+        current.add(p.location);
+      }
+    }
+    if (current.length > 1) segments.add(current);
+    return segments;
   }
 
   // -------------------------------------------------------------------
   // REVERSE GEOCODING (Google Geocoding API, uses the same key)
   // -------------------------------------------------------------------
-  Future<void> _resolveHaltAreaNames() async {
-    for (final item in finalItems) {
-      if (item is! HaltEvent) continue;
-      if (_googleApiKey.isEmpty) {
-        item.areaName = 'Set GOOGLE_MAPS_API_KEY in .env';
-        continue;
-      }
-      item.isResolvingArea = true;
-      if (mounted) setState(() {});
-
-      final name = await _reverseGeocode(item.location);
-      item.areaName = name ?? 'Unknown area';
-      item.isResolvingArea = false;
-      if (mounted) setState(() {});
+  Future<void> _resolveAllAreaNames() async {
+    for (final item in finalItems.whereType<StartEvent>()) {
+      await _resolveOne(item, item.location);
     }
+    for (final h in _halts) {
+      await _resolveOne(h, h.location);
+    }
+    for (final item in finalItems.whereType<StopEvent>()) {
+      await _resolveOne(item, item.location);
+    }
+  }
+
+  Future<void> _resolveOne(AreaResolvable item, LatLng location) async {
+    if (_googleApiKey.isEmpty) {
+      item.areaName = 'Set GOOGLE_MAPS_API_KEY in .env';
+      if (mounted) setState(() {});
+      return;
+    }
+    item.isResolvingArea = true;
+    if (mounted) setState(() {});
+
+    item.areaName = await _reverseGeocode(location) ?? 'Unknown area';
+    item.isResolvingArea = false;
+    if (mounted) setState(() {});
   }
 
   Future<String?> _reverseGeocode(LatLng point) async {
     try {
       final uri = Uri.parse(
-        'https://maps.googleapis.com/maps/api/geocode/json'
-        '?latlng=${point.latitude},${point.longitude}&key=$_googleApiKey',
+        'https://maps.googleapis.com/maps/api/geocode/json?latlng=${point.latitude},${point.longitude}&key=$_googleApiKey',
       );
       final res = await http.get(uri);
       if (res.statusCode != 200) return null;
       final data = jsonDecode(res.body);
       if (data['status'] != 'OK' || (data['results'] as List).isEmpty) return null;
 
-      // Prefer sublocality (e.g. "Kurla West") then locality (e.g. "Mumbai")
       for (final result in data['results']) {
         final components = result['address_components'] as List;
         String? sublocality;
         String? locality;
         for (final c in components) {
           final types = List<String>.from(c['types']);
-          if (types.contains('sublocality_level_1') || types.contains('sublocality')) {
-            sublocality ??= c['long_name'];
-          }
-          if (types.contains('locality')) {
-            locality ??= c['long_name'];
-          }
+          if (types.contains('sublocality_level_1') || types.contains('sublocality')) sublocality ??= c['long_name'];
+          if (types.contains('locality')) locality ??= c['long_name'];
         }
         if (sublocality != null && locality != null) return '$sublocality, $locality';
         if (sublocality != null) return sublocality;
@@ -346,153 +249,44 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
   }
 
   // -------------------------------------------------------------------
-  // MARKER BITMAP GENERATION
-  // -------------------------------------------------------------------
-  Future<BitmapDescriptor> _drawMarker({
-    IconData? icon,
-    String? text,
-    required Color background,
-    Color foreground = Colors.white,
-    double diameter = 90,
-    bool withRing = true,
-  }) async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final radius = diameter / 2;
-
-    // Soft shadow
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.25)
-      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 4);
-    canvas.drawCircle(Offset(radius, radius + 2), radius - 4, shadowPaint);
-
-    // Outer ring
-    if (withRing) {
-      final ringPaint = Paint()..color = Colors.white;
-      canvas.drawCircle(Offset(radius, radius), radius, ringPaint);
-    }
-
-    // Fill
-    final fillPaint = Paint()..color = background;
-    canvas.drawCircle(Offset(radius, radius), radius - (withRing ? 6 : 0), fillPaint);
-
-    if (text != null) {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: text,
-          style: TextStyle(color: foreground, fontSize: diameter * 0.42, fontWeight: FontWeight.bold),
-        ),
-        textDirection: TextDirection.ltr,
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(radius - tp.width / 2, radius - tp.height / 2));
-    } else if (icon != null) {
-      final tp = TextPainter(textDirection: TextDirection.ltr);
-      tp.text = TextSpan(
-        text: String.fromCharCode(icon.codePoint),
-        style: TextStyle(
-          fontSize: diameter * 0.5,
-          fontFamily: icon.fontFamily,
-          package: icon.fontPackage,
-          color: foreground,
-        ),
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(radius - tp.width / 2, radius - tp.height / 2));
-    }
-
-    final picture = recorder.endRecording();
-    final img = await picture.toImage(diameter.toInt(), diameter.toInt());
-    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
-  }
-
-  Future<BitmapDescriptor> _drawArrow(double bearingDeg, {Color color = Colors.white}) async {
-    const double size = 40;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    canvas.translate(size / 2, size / 2);
-    canvas.rotate(bearingDeg * math.pi / 180);
-
-    final path = Path()
-      ..moveTo(0, -size * 0.35)
-      ..lineTo(size * 0.22, size * 0.28)
-      ..lineTo(0, size * 0.12)
-      ..lineTo(-size * 0.22, size * 0.28)
-      ..close();
-
-    final paint = Paint()..color = color;
-    canvas.drawPath(path, paint);
-
-    final picture = recorder.endRecording();
-    final img = await picture.toImage(size.toInt(), size.toInt());
-    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
-  }
-
-  Future<void> _buildStaticIcons() async {
-    _startIcon = await _drawMarker(icon: Icons.play_arrow_rounded, background: const Color(0xFF2E7D32), diameter: 84);
-    _stopIcon = await _drawMarker(icon: Icons.flag_rounded, background: const Color(0xFFC62828), diameter: 84);
-    _gapIcon = await _drawMarker(icon: Icons.wifi_off_rounded, background: const Color(0xFFD84315), diameter: 78);
-    _dotIcon = await _drawMarker(text: '', background: const Color(0xFF1E3A8A), diameter: 26, withRing: false);
-    _dotIconSelected = await _drawMarker(text: '', background: const Color(0xFF1E3A8A), diameter: 40);
-    _walkerIcon = await _drawMarker(icon: Icons.directions_walk_rounded, background: const Color(0xFF6A1B9A), diameter: 88);
-  }
-
-  Future<void> _buildHaltIcons() async {
-    for (final item in finalItems) {
-      if (item is HaltEvent && !_haltIcons.containsKey(item.haltNumber)) {
-        _haltIcons[item.haltNumber] = await _drawMarker(
-          text: '${item.haltNumber}',
-          background: const Color(0xFFEF6C00),
-          diameter: 88,
-        );
-      }
-    }
-    if (mounted) setState(() {});
-  }
-
-  Future<BitmapDescriptor> _arrowIconFor(double bearing) async {
-    final bucket = (bearing / 15).round() * 15 % 360;
-    if (_arrowIcons.containsKey(bucket)) return _arrowIcons[bucket]!;
-    final icon = await _drawArrow(bucket.toDouble());
-    _arrowIcons[bucket] = icon;
-    return icon;
-  }
-
-  // -------------------------------------------------------------------
-  // MARKERS BUILD (rebuilt reactively from state)
+  // MARKERS / OVERLAYS
   // -------------------------------------------------------------------
   Set<Marker> _buildMarkers() {
     final markers = <Marker>{};
+    // Other markers fade during summary mode so the walker is the one
+    // unmistakable focal point — nothing overlaps or competes with it.
+    final otherAlpha = _summaryMode ? 0.55 : 1.0;
 
     for (final item in finalItems) {
-      if (item is StartEvent && _startIcon != null) {
+      if (item is StartEvent && _icons.startIcon != null) {
         markers.add(Marker(
           markerId: const MarkerId('start'),
           position: item.location,
-          icon: _startIcon!,
+          icon: _icons.startIcon!,
           anchor: const Offset(0.5, 0.5),
+          alpha: otherAlpha,
           onTap: () => _onPointTapped(item),
         ));
-      } else if (item is StopEvent && _stopIcon != null) {
+      } else if (item is StopEvent && _icons.stopIcon != null) {
         markers.add(Marker(
           markerId: const MarkerId('stop'),
           position: item.location,
-          icon: _stopIcon!,
+          icon: _icons.stopIcon!,
           anchor: const Offset(0.5, 0.5),
+          alpha: otherAlpha,
           onTap: () => _onPointTapped(item),
         ));
-      } else if (item is TimeGap && _gapIcon != null) {
+      } else if (item is TimeGap && _icons.gapIcon != null) {
         markers.add(Marker(
           markerId: MarkerId('gap_${item.startTime.millisecondsSinceEpoch}'),
           position: item.lastKnownLocation,
-          icon: _gapIcon!,
+          icon: _icons.gapIcon!,
           anchor: const Offset(0.5, 0.5),
+          alpha: otherAlpha,
           onTap: () => _onPointTapped(item),
         ));
       } else if (item is HaltEvent) {
-        final icon = _haltIcons[item.haltNumber];
+        final icon = _icons.cachedHaltIcon(item.haltNumber) ?? _icons.dotIconSelected;
         if (icon == null) continue;
         markers.add(Marker(
           markerId: MarkerId('halt_${item.haltNumber}'),
@@ -500,16 +294,15 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
           icon: icon,
           anchor: const Offset(0.5, 0.5),
           zIndex: 5,
+          alpha: otherAlpha,
           onTap: () => _onPointTapped(item),
         ));
       } else if (item is LocationPoint && !_summaryMode) {
         final isSelected = selectedItem == item;
-        final icon = isSelected ? _dotIconSelected : _dotIcon;
+        final icon = isSelected ? _icons.dotIconSelected : _icons.dotIcon;
         if (icon == null) continue;
         markers.add(Marker(
-          markerId: ObjectKey(item).toString().isEmpty
-              ? MarkerId('pt_${item.time.millisecondsSinceEpoch}')
-              : MarkerId('pt_${item.time.millisecondsSinceEpoch}'),
+          markerId: MarkerId('pt_${item.time.millisecondsSinceEpoch}'),
           position: item.location,
           icon: icon,
           anchor: const Offset(0.5, 0.5),
@@ -518,17 +311,45 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
       }
     }
 
-    if (_summaryMode && _walkerPosition != null && _walkerIcon != null) {
+    if (_summaryMode && _walkerPosition != null && _icons.walkerIcon != null) {
       markers.add(Marker(
         markerId: const MarkerId('walker'),
         position: _walkerPosition!,
-        icon: _walkerIcon!,
-        anchor: const Offset(0.5, 0.5),
-        zIndex: 10,
+        icon: _icons.walkerIcon!,
+        anchor: walkerMarkerAnchor,
+        zIndex: 100, // always drawn above everything else
       ));
     }
 
     return markers;
+  }
+
+  Set<Circle> _buildHaltCircles() {
+    return _halts
+        .map((h) => Circle(
+              circleId: CircleId('halt_region_${h.haltNumber}'),
+              center: h.location,
+              radius: h.regionRadiusMeters,
+              fillColor: const Color(0xFFEF6C00).withOpacity(0.18),
+              strokeColor: const Color(0xFFEF6C00).withOpacity(0.6),
+              strokeWidth: 2,
+            ))
+        .toSet();
+  }
+
+  Set<Polyline> _buildPolylines() {
+    return {
+      for (int i = 0; i < _movingSegments.length; i++)
+        Polyline(
+          polylineId: PolylineId('segment_$i'),
+          points: _movingSegments[i],
+          color: const Color(0xFF2962FF),
+          width: 5,
+          jointType: JointType.round,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+        ),
+    };
   }
 
   // -------------------------------------------------------------------
@@ -538,12 +359,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     setState(() => selectedItem = item);
     Future.delayed(const Duration(milliseconds: 100), () {
       if (item.key.currentContext != null) {
-        Scrollable.ensureVisible(
-          item.key.currentContext!,
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeInOut,
-          alignment: 0.5,
-        );
+        Scrollable.ensureVisible(item.key.currentContext!, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut, alignment: 0.5);
       }
     });
   }
@@ -556,7 +372,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
   String formatTime(DateTime d) => "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
 
   // -------------------------------------------------------------------
-  // SUMMARY PLAYBACK ("person walking along the path")
+  // SUMMARY PLAYBACK
   // -------------------------------------------------------------------
   void _toggleSummaryMode() {
     setState(() {
@@ -584,9 +400,7 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     }
   }
 
-  void _setSpeed(double speed) {
-    setState(() => _playbackSpeed = speed);
-  }
+  void _setSpeed(double speed) => setState(() => _playbackSpeed = speed);
 
   void _startPlayback() {
     _playbackTimer?.cancel();
@@ -630,7 +444,6 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
     final totalMicros = end.difference(start).inMicroseconds;
     final targetTime = start.add(Duration(microseconds: (totalMicros * _progress).round()));
 
-    // Binary-search-ish scan for bracketing points (trajectory is time-sorted)
     LocationPoint before = fullTrajectory.first;
     LocationPoint after = fullTrajectory.last;
     for (int i = 0; i < fullTrajectory.length - 1; i++) {
@@ -683,32 +496,29 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
         children: [
           GoogleMap(
             onMapCreated: (c) => _mapController = c,
-            initialCameraPosition: CameraPosition(
-              target: rawRoute.isNotEmpty ? rawRoute.first : const LatLng(0, 0),
-              zoom: 14.0,
-            ),
+            initialCameraPosition: CameraPosition(target: rawRoute.isNotEmpty ? rawRoute.first : const LatLng(0, 0), zoom: 14.0),
             markers: _buildMarkers(),
-            polylines: {
-              Polyline(
-                polylineId: const PolylineId('route'),
-                points: rawRoute,
-                color: const Color(0xFF2962FF),
-                width: 5,
-                jointType: JointType.round,
-                startCap: Cap.roundCap,
-                endCap: Cap.roundCap,
-              ),
-            },
+            circles: _buildHaltCircles(),
+            polylines: _buildPolylines(),
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             padding: const EdgeInsets.only(bottom: 220, top: 90),
           ),
 
-          // --- FLOATING INFO CARD (selected item OR playback time) ---
-          if (selectedItem != null && !_summaryMode) _buildSelectedItemCard(),
-          if (_summaryMode) _buildPlaybackBar(),
+          if (selectedItem != null && !_summaryMode)
+            SelectedItemCard(item: selectedItem!, formatTime: formatTime, onClose: () => setState(() => selectedItem = null)),
 
-          // --- SLIDING BOTTOM PANEL ---
+          if (_summaryMode)
+            PlaybackBar(
+              timeLabel: _walkerTime != null ? formatTime(_walkerTime!) : '--:--',
+              progress: _progress,
+              isPlaying: _isPlaying,
+              speed: _playbackSpeed,
+              onScrub: _onScrubbed,
+              onTogglePlay: _togglePlayPause,
+              onSpeedChange: _setSpeed,
+            ),
+
           if (!_summaryMode)
             DraggableScrollableSheet(
               initialChildSize: 0.32,
@@ -726,14 +536,25 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
                     slivers: [
                       SliverPersistentHeader(
                         pinned: true,
-                        delegate: _StickyHeaderDelegate(height: 126, child: _buildSheetHeader()),
-                      ),
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) => _buildTile(filteredList[index]),
-                          childCount: filteredList.length,
+                        delegate: _SheetHeaderDelegate(
+                          height: 126,
+                          child: TimelineSheetHeader(currentFilter: currentFilter, onFilterChanged: (f) => setState(() => currentFilter = f)),
                         ),
                       ),
+                      if (currentFilter == FilterType.summary)
+                        SliverToBoxAdapter(child: RouteSummaryList(entries: buildRouteNarrative(finalItems, formatTime)))
+                      else
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) => TimelineTile(
+                              item: filteredList[index],
+                              isSelected: selectedItem == filteredList[index],
+                              formatTime: formatTime,
+                              onTap: _onListItemTapped,
+                            ),
+                            childCount: filteredList.length,
+                          ),
+                        ),
                     ],
                   ),
                 );
@@ -743,222 +564,21 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
       ),
     );
   }
+}
 
-  Widget _buildSheetHeader() {
-    return Container(
-      color: Colors.white,
-      child: Column(
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 10, bottom: 8),
-            width: 46,
-            height: 5,
-            decoration: BoxDecoration(color: Colors.grey[350], borderRadius: BorderRadius.circular(10)),
-          ),
-          const Text("Timeline Details", style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 16),
-            child: SegmentedButton<FilterType>(
-              segments: const [
-                ButtonSegment(value: FilterType.all, label: Text('All')),
-                ButtonSegment(value: FilterType.halts, label: Text('Halts')),
-                ButtonSegment(value: FilterType.gaps, label: Text('Gaps')),
-              ],
-              selected: {currentFilter},
-              onSelectionChanged: (s) => setState(() => currentFilter = s.first),
-            ),
-          ),
-          const Divider(height: 1),
-        ],
-      ),
-    );
-  }
+class _SheetHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final double height;
+  final Widget child;
+  _SheetHeaderDelegate({required this.height, required this.child});
 
-  Widget _buildTile(TrackItem item) {
-    if (item is StartEvent) {
-      return _tile(
-        key: item.key,
-        color: const Color(0xFFE8F5E9),
-        icon: Icons.play_circle_fill_rounded,
-        iconColor: const Color(0xFF2E7D32),
-        title: "Trip Started",
-        subtitle: "At ${formatTime(item.time)}",
-        onTap: () => _onListItemTapped(item, item.location),
-      );
-    }
-    if (item is StopEvent) {
-      return _tile(
-        key: item.key,
-        color: const Color(0xFFFFEBEE),
-        icon: Icons.flag_circle_rounded,
-        iconColor: const Color(0xFFC62828),
-        title: "Trip Ended",
-        subtitle: "At ${formatTime(item.time)}",
-        onTap: () => _onListItemTapped(item, item.location),
-      );
-    }
-    if (item is TimeGap) {
-      return _tile(
-        key: item.key,
-        color: const Color(0xFFFFF3E0),
-        icon: Icons.wifi_off_rounded,
-        iconColor: const Color(0xFFD84315),
-        title: "No Signal / App Closed",
-        subtitle: "From ${formatTime(item.startTime)} to ${formatTime(item.endTime)}",
-        onTap: () => _onListItemTapped(item, item.lastKnownLocation),
-      );
-    }
-    if (item is HaltEvent) {
-      final durationMin = item.duration.inMinutes;
-      final subtitleParts = [
-        "From ${formatTime(item.startTime)} to ${formatTime(item.endTime)} · ${durationMin}m",
-        if (item.isResolvingArea) "Locating area..." else if (item.areaName != null) item.areaName!,
-      ];
-      return _tile(
-        key: item.key,
-        color: const Color(0xFFFFF3E0),
-        icon: Icons.location_history_rounded,
-        iconColor: const Color(0xFFEF6C00),
-        title: "Halt #${item.haltNumber}",
-        subtitle: subtitleParts.join('\n'),
-        onTap: () => _onListItemTapped(item, item.location),
-      );
-    }
-    if (item is LocationPoint) {
-      final isSelected = selectedItem == item;
-      return _tile(
-        key: item.key,
-        color: isSelected ? const Color(0xFFE3EAFD) : Colors.white,
-        icon: Icons.my_location_rounded,
-        iconColor: const Color(0xFF1E3A8A),
-        title: formatTime(item.time),
-        subtitle: "Moving",
-        onTap: () => _onListItemTapped(item, item.location),
-      );
-    }
-    return const SizedBox();
-  }
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
 
-  Widget _tile({
-    required Key key,
-    required Color color,
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) {
-    return Container(
-      key: key,
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
-      child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        leading: CircleAvatar(backgroundColor: Colors.white, child: Icon(icon, color: iconColor)),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(subtitle),
-        onTap: onTap,
-      ),
-    );
-  }
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => SizedBox(height: height, child: child);
 
-  Widget _buildSelectedItemCard() {
-    String text;
-    if (selectedItem is TimeGap) {
-      final g = selectedItem as TimeGap;
-      text = "Signal Lost: ${formatTime(g.startTime)} - ${formatTime(g.endTime)}";
-    } else if (selectedItem is HaltEvent) {
-      final h = selectedItem as HaltEvent;
-      final area = h.isResolvingArea ? "locating..." : (h.areaName ?? "unknown area");
-      text = "Halt #${h.haltNumber} · ${formatTime(h.startTime)}-${formatTime(h.endTime)} · $area";
-    } else if (selectedItem is StartEvent) {
-      text = "Trip Started at ${formatTime((selectedItem as StartEvent).time)}";
-    } else if (selectedItem is StopEvent) {
-      text = "Trip Ended at ${formatTime((selectedItem as StopEvent).time)}";
-    } else {
-      text = "Location at ${formatTime((selectedItem as LocationPoint).time)}";
-    }
-
-    return Positioned(
-      top: 16,
-      left: 16,
-      right: 16,
-      child: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(16),
-        color: const Color(0xFF1E3A8A),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 20),
-                onPressed: () => setState(() => selectedItem = null),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPlaybackBar() {
-    final timeLabel = _walkerTime != null ? formatTime(_walkerTime!) : '--:--';
-    return Positioned(
-      left: 16,
-      right: 16,
-      bottom: 24,
-      child: Material(
-        elevation: 8,
-        borderRadius: BorderRadius.circular(20),
-        color: Colors.white,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(color: const Color(0xFF6A1B9A).withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                    child: Text(timeLabel, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF6A1B9A))),
-                  ),
-                  const Spacer(),
-                  ...[1.0, 2.0, 4.0].map((s) => Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: ChoiceChip(
-                          label: Text('${s.toInt()}x'),
-                          selected: _playbackSpeed == s,
-                          onSelected: (_) => _setSpeed(s),
-                          selectedColor: const Color(0xFF6A1B9A),
-                          labelStyle: TextStyle(color: _playbackSpeed == s ? Colors.white : Colors.black87, fontWeight: FontWeight.w600),
-                        ),
-                      )),
-                ],
-              ),
-              Slider(
-                value: _progress.clamp(0.0, 1.0),
-                onChanged: (v) => _onScrubbed(v),
-                activeColor: const Color(0xFF6A1B9A),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    iconSize: 42,
-                    icon: Icon(_isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, color: const Color(0xFF6A1B9A)),
-                    onPressed: _togglePlayPause,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  @override
+  bool shouldRebuild(covariant _SheetHeaderDelegate oldDelegate) => true;
 }
