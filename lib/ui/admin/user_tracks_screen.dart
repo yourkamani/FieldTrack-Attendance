@@ -10,153 +10,228 @@ class UserTracksScreen extends StatelessWidget {
 
   const UserTracksScreen({Key? key, required this.userId, required this.userName}) : super(key: key);
 
+  String _formatDate(DateTime d) => "${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}";
+  String _formatTime(DateTime d) => "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
+
+  Future<void> _showSelfies(BuildContext context, Map<String, dynamic> session) async {
+    final supabase = Supabase.instance.client;
+    final startPath = session['start_selfie_path'] as String?;
+    final stopPath = session['stop_selfie_path'] as String?;
+    final autoStopped = session['auto_stopped'] == true;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Selfies'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: FutureBuilder<List<String?>>(
+            future: Future.wait([
+              if (startPath != null) supabase.storage.from('selfies').createSignedUrl(startPath, 3600) else Future.value(null),
+              if (stopPath != null) supabase.storage.from('selfies').createSignedUrl(stopPath, 3600) else Future.value(null),
+            ]),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
+              }
+              final startUrl = snapshot.data![0];
+              final stopUrl = snapshot.data!.length > 1 ? snapshot.data![1] : null;
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _selfieRow('Start', startUrl),
+                  const SizedBox(height: 16),
+                  _selfieRow('Stop', stopUrl, fallback: autoStopped ? 'Auto-stopped after 12 hours — no selfie taken' : 'Not available'),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      ),
+    );
+  }
+
+  Widget _selfieRow(String label, String? url, {String fallback = 'Not available'}) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        if (url != null)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(url, height: 180, fit: BoxFit.cover),
+          )
+        else
+          SizedBox(
+            height: 100,
+            child: Center(child: Text(fallback, style: TextStyle(color: Colors.grey[600]))),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final supabase = Supabase.instance.client;
 
     return Scaffold(
       appBar: AppBar(title: Text('$userName\'s Tracks')),
-      backgroundColor: Colors.grey[100], // Slight background color to make cards pop
+      backgroundColor: Colors.grey[100],
       body: FutureBuilder(
-        // We now fetch latitude and longitude to draw the preview map
         future: supabase
-            .from('location_tracks')
-            .select('session_id, timestamp, latitude, longitude')
+            .from('sessions')
+            .select()
             .eq('user_id', userId)
-            .order('timestamp', ascending: true),
+            .order('start_time', ascending: false),
         builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
           if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          
-          // Group all data points by session_id
-          Map<String, List<Map<String, dynamic>>> sessionData = {};
-          for (var row in snapshot.data!) {
-            String sId = row['session_id'];
-            if (!sessionData.containsKey(sId)) {
-              sessionData[sId] = [];
-            }
-            sessionData[sId]!.add(row);
-          }
-          
-          // Sort sessions so the most recent is at the top
-          List<MapEntry<String, List<Map<String, dynamic>>>> sortedSessions = sessionData.entries.toList()
-            ..sort((a, b) {
-              DateTime timeA = DateTime.parse(a.value.first['timestamp']);
-              DateTime timeB = DateTime.parse(b.value.first['timestamp']);
-              return timeB.compareTo(timeA);
-            });
 
-          if (sortedSessions.isEmpty) {
+          final sessions = snapshot.data!;
+          if (sessions.isEmpty) {
             return Center(child: Text("$userName hasn't recorded any tracks yet."));
           }
 
           return ListView.builder(
             padding: const EdgeInsets.all(10),
-            itemCount: sortedSessions.length,
+            itemCount: sessions.length,
             itemBuilder: (context, index) {
-              final session = sortedSessions[index];
-              final pointsData = session.value;
+              final session = sessions[index] as Map<String, dynamic>;
+              final sessionId = session['session_id'] as String;
+              final start = DateTime.parse(session['start_time']);
+              final endRaw = session['end_time'] as String?;
+              final end = endRaw != null ? DateTime.parse(endRaw) : null;
+              final autoStopped = session['auto_stopped'] == true;
 
-              // 1. Calculate Times
-              final start = DateTime.parse(pointsData.first['timestamp']);
-              final end = DateTime.parse(pointsData.last['timestamp']);
-              final duration = end.difference(start);
+              String startStr = "${_formatDate(start)} at ${_formatTime(start)}";
+              String durationStr;
+              String endStr;
 
-              // 2. Format Dates & Times
-              String formatDate(DateTime d) => "${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}";
-              String formatTime(DateTime d) => "${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
-
-              String startStr = "${formatDate(start)} at ${formatTime(start)}";
-              
-              // Only show the End Date if it is different from the Start Date
-              String endStr = formatTime(end);
-              if (start.day != end.day || start.month != end.month || start.year != end.year) {
-                endStr = "${formatDate(end)} at $endStr";
+              if (end != null) {
+                final duration = end.difference(start);
+                durationStr = "${duration.inHours}h ${duration.inMinutes.remainder(60)}m worked";
+                endStr = _formatTime(end);
+                if (start.day != end.day || start.month != end.month || start.year != end.year) {
+                  endStr = "${_formatDate(end)} at $endStr";
+                }
+              } else {
+                durationStr = "In progress";
+                endStr = "—";
               }
-
-              String durationStr = "${duration.inHours}h ${duration.inMinutes.remainder(60)}m worked";
-
-              // 3. Extract Route Points for the Preview Map
-              List<LatLng> route = pointsData
-                  .map((p) => LatLng(p['latitude'], p['longitude']))
-                  .toList();
 
               return Card(
                 elevation: 4,
-                clipBehavior: Clip.antiAlias, // Ensures the map respects the card's rounded corners
+                clipBehavior: Clip.antiAlias,
                 margin: const EdgeInsets.only(bottom: 15),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                child: InkWell(
-                  onTap: () => Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => MapMonitorScreen(userId: userId, sessionId: session.key)
-                  )),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // --- MAP PREVIEW SECTION ---
-                      SizedBox(
-                        height: 130, // Small preview height
-                        width: double.infinity,
-                        child: IgnorePointer(
-                          // IgnorePointer prevents the map from stealing scrolls from the ListView
-                          child: FlutterMap(
-                            options: MapOptions(
-                              initialCenter: route.isNotEmpty ? route.first : const LatLng(0, 0),
-                              initialZoom: 13.0,
-                              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none), // Disable zooming/panning
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // --- MAP PREVIEW SECTION ---
+                    SizedBox(
+                      height: 130,
+                      width: double.infinity,
+                      child: FutureBuilder(
+                        future: supabase
+                            .from('location_tracks')
+                            .select('latitude, longitude')
+                            .eq('session_id', sessionId)
+                            .order('timestamp', ascending: true),
+                        builder: (context, AsyncSnapshot<List<dynamic>> pointsSnap) {
+                          final points = pointsSnap.data ?? [];
+                          final route = points.map((p) => LatLng(p['latitude'], p['longitude'])).toList();
+
+                          return InkWell(
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => MapMonitorScreen(userId: userId, sessionId: sessionId)),
                             ),
+                            child: IgnorePointer(
+                              child: route.isEmpty
+                                  ? Container(color: Colors.grey[200])
+                                  : FlutterMap(
+                                      options: MapOptions(
+                                        initialCenter: route.first,
+                                        initialZoom: 13.0,
+                                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                                      ),
+                                      children: [
+                                        TileLayer(
+                                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                          userAgentPackageName: 'com.example.attendance_tracker',
+                                        ),
+                                        PolylineLayer(polylines: [Polyline(points: route, color: Colors.blue, strokeWidth: 4.0)]),
+                                      ],
+                                    ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+
+                    // --- DETAILS SECTION ---
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              TileLayer(
-                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                userAgentPackageName: 'com.example.attendance_tracker',
+                              Text(durationStr, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)),
+                              if (autoStopped)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(color: Colors.orange[100], borderRadius: BorderRadius.circular(6)),
+                                  child: const Text('Auto-stopped (12h)', style: TextStyle(fontSize: 11, color: Colors.deepOrange)),
+                                ),
+                            ],
+                          ),
+                          const Divider(),
+                          const SizedBox(height: 5),
+                          Row(
+                            children: [
+                              const Icon(Icons.play_circle_fill, color: Colors.green, size: 20),
+                              const SizedBox(width: 8),
+                              Text("Start: $startStr"),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              const Icon(Icons.stop_circle, color: Colors.red, size: 20),
+                              const SizedBox(width: 8),
+                              Text("End:   $endStr"),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                                  label: const Text('View Selfies'),
+                                  onPressed: () => _showSelfies(context, session),
+                                ),
                               ),
-                              PolylineLayer(
-                                polylines: [
-                                  Polyline(points: route, color: Colors.blue, strokeWidth: 4.0),
-                                ],
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  icon: const Icon(Icons.map_outlined, size: 18),
+                                  label: const Text('View Route'),
+                                  onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => MapMonitorScreen(userId: userId, sessionId: sessionId)),
+                                  ),
+                                ),
                               ),
                             ],
                           ),
-                        ),
+                        ],
                       ),
-
-                      // --- DETAILS SECTION ---
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  durationStr, 
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)
-                                ),
-                                const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
-                              ],
-                            ),
-                            const Divider(),
-                            const SizedBox(height: 5),
-                            Row(
-                              children: [
-                                const Icon(Icons.play_circle_fill, color: Colors.green, size: 20),
-                                const SizedBox(width: 8),
-                                Text("Start: $startStr"),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(Icons.stop_circle, color: Colors.red, size: 20),
-                                const SizedBox(width: 8),
-                                Text("End:   $endStr"),
-                              ],
-                            ),
-                          ],
-                        ),
-                      )
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               );
             },

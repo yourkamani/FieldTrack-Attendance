@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'database_helper.dart';
@@ -13,8 +14,15 @@ class SyncService {
     });
   }
 
-
   Future<void> syncOfflineData() async {
+    await _syncLocations();
+    await _syncSessions();
+  }
+
+  // -------------------------------------------------------------------
+  // LOCATIONS (unchanged)
+  // -------------------------------------------------------------------
+  Future<void> _syncLocations() async {
     final offlineLocations = await DatabaseHelper.instance.getUnsyncedLocations();
     if (offlineLocations.isEmpty) return;
 
@@ -36,7 +44,69 @@ class SyncService {
       await _supabase.from('location_tracks').insert(uploadBatch);
       await DatabaseHelper.instance.clearSyncedLocations(syncedIds);
     } catch (e) {
-      print("Sync failed: $e");
+      print("Location sync failed: $e");
     }
+  }
+
+  // -------------------------------------------------------------------
+  // SESSIONS + SELFIES
+  // -------------------------------------------------------------------
+  Future<void> _syncSessions() async {
+    final pending = await DatabaseHelper.instance.getUnsyncedSessions();
+
+    for (final session in pending) {
+      final sessionId = session['session_id'] as String;
+      final userId = session['user_id'] as String;
+
+      try {
+        String? startStoragePath;
+        String? stopStoragePath;
+
+        final startPath = session['start_selfie_path'] as String?;
+        if (startPath != null && File(startPath).existsSync()) {
+          startStoragePath = await _uploadSelfie(userId, sessionId, 'start', startPath);
+        }
+
+        final stopPath = session['stop_selfie_path'] as String?;
+        if (stopPath != null && File(stopPath).existsSync()) {
+          stopStoragePath = await _uploadSelfie(userId, sessionId, 'stop', stopPath);
+        }
+
+        await _supabase.from('sessions').upsert({
+          'session_id': sessionId,
+          'user_id': userId,
+          'start_time': session['start_time'],
+          'end_time': session['end_time'],
+          // We store the storage PATH, not a public URL — the admin
+          // screen requests a short-lived signed URL only when actually
+          // viewing a selfie, since the bucket is private.
+          'start_selfie_path': startStoragePath,
+          'stop_selfie_path': stopStoragePath,
+          'auto_stopped': session['auto_stopped'] == 1,
+        }, onConflict: 'session_id');
+
+        final isComplete = session['end_time'] != null;
+        if (isComplete) {
+          await DatabaseHelper.instance.markSessionSynced(sessionId);
+          // Free device storage now that originals are safely uploaded.
+          if (startPath != null) await File(startPath).delete().catchError((_) => File(startPath));
+          if (stopPath != null) await File(stopPath).delete().catchError((_) => File(stopPath));
+        }
+        // If the session is still active (end_time null), we leave it
+        // unsynced so the next sync pass picks up the eventual stop info.
+      } catch (e) {
+        print("Session sync failed for $sessionId: $e");
+      }
+    }
+  }
+
+  Future<String> _uploadSelfie(String userId, String sessionId, String type, String localPath) async {
+    final storagePath = '$userId/${sessionId}_$type.jpg';
+    await _supabase.storage.from('selfies').upload(
+          storagePath,
+          File(localPath),
+          fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
+        );
+    return storagePath;
   }
 }
