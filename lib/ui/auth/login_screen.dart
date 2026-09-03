@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../user/tracker_screen.dart';
-import 'admin_login_screen.dart'; // We will create this next
+import 'admin_login_screen.dart';
+import '../../core/fcm_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -38,6 +39,10 @@ class _LoginScreenState extends State<LoginScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_id', res['id']);
       await prefs.setString('role', res['role']);
+
+      // Don't let FCM issues block login navigation.
+      FcmService.init(ownerType: 'user', ownerId: res['id'])
+          .catchError((e) => debugPrint('FCM init failed: $e'));
 
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TrackerScreen()));
     } catch (e) {

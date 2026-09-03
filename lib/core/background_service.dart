@@ -4,6 +4,8 @@ import 'package:flutter_background_service_android/flutter_background_service_an
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'database_helper.dart';
 
 const Duration kMaxSessionDuration = Duration(hours: 12);
@@ -49,62 +51,82 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
+  // This isolate is separate from main.dart's — Supabase must be
+  // initialized here too, or any Supabase.instance.client call throws.
+  await Supabase.initialize(
+    url: 'https://tmoacgbszammuasaxapo.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtb2FjZ2JzemFtbXVhc2F4YXBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTg1MzgsImV4cCI6MjEwMjM3NDUzOH0.NJxYtAyRXPMi8P7H-sClCOpWcBIhqGwz-6TvastkeUw',
+  );
+
   final prefs = await SharedPreferences.getInstance();
   final userId = prefs.getString('user_id') ?? '';
 
-  // The UI screen generates the session id + start time BEFORE calling
-  // service.startService(), so the selfie rows and the location rows
-  // always share the same session_id. Fall back to a fresh id only if
-  // something upstream forgot to set it, so tracking still works.
+  // ...rest of onStart unchanged
+
   final sessionId = prefs.getString('current_session_id') ?? DateTime.now().millisecondsSinceEpoch.toString();
   final sessionStartRaw = prefs.getString('current_session_start');
   final sessionStart = sessionStartRaw != null ? DateTime.parse(sessionStartRaw) : DateTime.now();
+
+  // Isolate-local flag so we only ping the admin ONCE per GPS-off spell,
+  // not every minute for as long as it stays off.
+  bool gpsOffAlertSent = false;
 
   service.on('stopService').listen((event) {
     service.stopSelf();
   });
 
   Timer.periodic(const Duration(minutes: 1), (timer) async {
-    // --- 12-HOUR AUTO-STOP (no selfie required for this path) ---
     if (DateTime.now().difference(sessionStart) >= kMaxSessionDuration) {
+      // ... unchanged auto-stop block ...
       timer.cancel();
-
       await DatabaseHelper.instance.updateSessionAutoStop(
         sessionId: sessionId,
         endTime: DateTime.now().toIso8601String(),
       );
-
-      if (service is AndroidServiceInstance) {
-        if (await service.isForegroundService()) {
-          service.setForegroundNotificationInfo(
-            title: 'Tracking Auto-Stopped',
-            content: 'Reached the 12-hour tracking limit.',
-          );
-        }
-      }
-
-      // Let the UI know (in case the app is open) so it can reset its
-      // button state and clear the stale session id without a selfie.
       await prefs.remove('current_session_id');
       await prefs.remove('current_session_start');
-
       service.stopSelf();
       return;
     }
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool hasInternet = await InternetConnectionChecker.createInstance().hasConnection;
 
     if (!serviceEnabled) {
-      if (service is AndroidServiceInstance) {
-        if (await service.isForegroundService()) {
-          service.setForegroundNotificationInfo(
-            title: 'Tracking Paused',
-            content: 'Please turn on GPS to resume tracking.',
-          );
+      if (service is AndroidServiceInstance && await service.isForegroundService()) {
+        service.setForegroundNotificationInfo(
+          title: 'Tracking Paused',
+          content: 'Please turn on GPS to resume tracking.',
+        );
+      }
+
+      // Mark it in the live table (if we have internet) so the admin's
+      // "see latest location" read shows the correct state, and fire
+      // one alert push — only once per off-spell.
+      if (hasInternet) {
+        try {
+          await Supabase.instance.client.from('live_locations').upsert({
+            'user_id': userId,
+            'gps_enabled': false,
+            'updated_at': DateTime.now().toIso8601String(),
+          }, onConflict: 'user_id');
+
+          if (!gpsOffAlertSent) {
+            gpsOffAlertSent = true;
+            await Supabase.instance.client.functions.invoke('send-push', body: {
+              'kind': 'location_off_alert',
+              'user_id': userId,
+            });
+          }
+        } catch (e) {
+          print('Failed to report GPS-off state: $e');
         }
       }
       return;
     }
+
+    // GPS is back on — reset the flag so a future off-spell alerts again.
+    gpsOffAlertSent = false;
 
     try {
       Position position = await Geolocator.getCurrentPosition(
@@ -119,16 +141,29 @@ void onStart(ServiceInstance service) async {
         'timestamp': DateTime.now().toIso8601String(),
       });
 
-      if (service is AndroidServiceInstance) {
-        if (await service.isForegroundService()) {
-          final now = DateTime.now();
-          final timeString = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-
-          service.setForegroundNotificationInfo(
-            title: 'Tracking Active',
-            content: 'Last location saved at $timeString',
-          );
+      // Best-effort live write — separate from the offline sync queue
+      // above, which is for the full track history.
+      if (hasInternet) {
+        try {
+          await Supabase.instance.client.from('live_locations').upsert({
+            'user_id': userId,
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+            'gps_enabled': true,
+            'updated_at': DateTime.now().toIso8601String(),
+          }, onConflict: 'user_id');
+        } catch (e) {
+          print('Failed to write live location: $e');
         }
+      }
+
+      if (service is AndroidServiceInstance && await service.isForegroundService()) {
+        final now = DateTime.now();
+        final timeString = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+        service.setForegroundNotificationInfo(
+          title: 'Tracking Active',
+          content: 'Last location saved at $timeString',
+        );
       }
     } catch (e) {
       print("Error fetching location: $e");

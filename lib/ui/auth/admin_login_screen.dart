@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../admin/admin_dashboard.dart';
+import '../../core/fcm_service.dart';
 
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({Key? key}) : super(key: key);
@@ -32,6 +33,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_id', response['id']);
         await prefs.setString('role', 'admin');
+        
+        // Don't let FCM issues block login navigation.
+        FcmService.init(ownerType: 'admin', ownerId: response['id'])
+            .catchError((e) => debugPrint('FCM init failed: $e'));
 
         Navigator.pushAndRemoveUntil(
           context,

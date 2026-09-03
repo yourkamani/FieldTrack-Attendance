@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'user_tracks_screen.dart';
+import 'live_location_sheet.dart';
 
 class RoleUsersScreen extends StatefulWidget {
   final String role;
@@ -56,7 +57,19 @@ class _RoleUsersScreenState extends State<RoleUsersScreen> {
                         leading: const CircleAvatar(child: Icon(Icons.person)),
                         title: Text(user['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
                         subtitle: Text(user['phone']),
-                        trailing: const Icon(Icons.chevron_right),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.my_location, color: Colors.blue),
+                              onPressed: () => showModalBottomSheet(
+                                context: context,
+                                builder: (_) => LiveLocationSheet(userId: user['id'], userName: user['name']),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right),
+                          ],
+                        ),
                         onTap: () => Navigator.push(context, MaterialPageRoute(
                           builder: (_) => UserTracksScreen(userId: user['id'], userName: user['name'])
                         )),
