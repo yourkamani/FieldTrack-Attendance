@@ -51,7 +51,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyDr1tCdCg7WMKt6j0k_SM_4a-HWD-4GhEQ',
-    appId: '1:99666672265:android:faeb8053b454c9b82a6458',
+    appId: '1:99666672265:android:a12ec3493df773e42a6458',
     messagingSenderId: '99666672265',
     projectId: 'attendancetracker-b9d2a',
     storageBucket: 'attendancetracker-b9d2a.firebasestorage.app',
@@ -59,11 +59,11 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBDxKCW-HkXCsEv97R05g-MbHYkPDoDJYo',
-    appId: '1:99666672265:ios:b4549ae935177dbc2a6458',
+    appId: '1:99666672265:ios:79e8f765c69f1b672a6458',
     messagingSenderId: '99666672265',
     projectId: 'attendancetracker-b9d2a',
     storageBucket: 'attendancetracker-b9d2a.firebasestorage.app',
-    iosBundleId: 'com.example.attendanceTracker',
+    iosBundleId: 'com.krish.attendancetracker',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -83,4 +83,5 @@ class DefaultFirebaseOptions {
     authDomain: 'attendancetracker-b9d2a.firebaseapp.com',
     storageBucket: 'attendancetracker-b9d2a.firebasestorage.app',
   );
+
 }

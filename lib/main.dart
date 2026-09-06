@@ -56,17 +56,18 @@ void main() async {
 
   Widget initialScreen = const LoginScreen(); // Default to login
 
-  // If user_id exists, bypass login
-  if (userId != null && userId.isNotEmpty) {
-    if (role == 'admin') {
+  if (role == 'admin') {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null && userId != null && userId.isNotEmpty) {
       initialScreen = const AdminDashboard();
-      FcmService.init(ownerType: 'admin', ownerId: userId)
-          .catchError((e) => debugPrint('FCM init failed: $e'));
+      FcmService.init(ownerType: 'admin', ownerId: userId).catchError((e) => debugPrint('$e'));
     } else {
-      initialScreen = const TrackerScreen();
-      FcmService.init(ownerType: 'user', ownerId: userId)
-          .catchError((e) => debugPrint('FCM init failed: $e'));
+      await prefs.clear(); // stale/expired — force re-login
+      initialScreen = const LoginScreen();
     }
+  } else if (userId != null && userId.isNotEmpty) {
+    initialScreen = const TrackerScreen();
+    FcmService.init(ownerType: 'user', ownerId: userId).catchError((e) => debugPrint('$e'));
   }
 
   runApp(MyApp(initialScreen: initialScreen));

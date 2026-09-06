@@ -21,35 +21,33 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     final supabase = Supabase.instance.client;
 
     try {
-      // Query the admins table
-      final response = await supabase
-          .from('admins')
-          .select()
-          .eq('username', usernameCtrl.text)
-          .eq('password', passwordCtrl.text)
-          .maybeSingle();
+      final authResponse = await supabase.auth.signInWithPassword(
+        email: usernameCtrl.text, // now expects an email
+        password: passwordCtrl.text,
+      );
 
-      if (response != null) {
+      if (authResponse.user != null) {
+        final adminRow = await supabase
+            .from('admins')
+            .select()
+            .eq('auth_user_id', authResponse.user!.id)
+            .maybeSingle();
+
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_id', response['id']);
+        await prefs.setString('user_id', adminRow?['id'] ?? authResponse.user!.id);
         await prefs.setString('role', 'admin');
-        
-        // Don't let FCM issues block login navigation.
-        FcmService.init(ownerType: 'admin', ownerId: response['id'])
+
+        FcmService.init(ownerType: 'admin', ownerId: adminRow?['id'] ?? authResponse.user!.id)
             .catchError((e) => debugPrint('FCM init failed: $e'));
 
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (_) => const AdminDashboard()),
-          (route) => false, // Clears the navigation stack
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid username or password')),
+          (route) => false,
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Invalid login')));
     }
     setState(() => loading = false);
   }

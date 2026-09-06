@@ -100,9 +100,6 @@ void onStart(ServiceInstance service) async {
         );
       }
 
-      // Mark it in the live table (if we have internet) so the admin's
-      // "see latest location" read shows the correct state, and fire
-      // one alert push — only once per off-spell.
       if (hasInternet) {
         try {
           await Supabase.instance.client.from('live_locations').upsert({
@@ -113,9 +110,30 @@ void onStart(ServiceInstance service) async {
 
           if (!gpsOffAlertSent) {
             gpsOffAlertSent = true;
+
+            final userRow = await Supabase.instance.client
+                .from('users')
+                .select('name, phone')
+                .eq('id', userId)
+                .maybeSingle();
+            final userName = userRow?['name'] ?? 'Unknown user';
+            final userPhone = userRow?['phone'] ?? '';
+
+            // Source of truth — the notifications screen reads this table.
+            await Supabase.instance.client.from('notifications').insert({
+              'user_id': userId,
+              'user_name': userName,
+              'user_phone': userPhone,
+              'type': 'location_off',
+              'message': '$userName turned off their location.',
+            });
+
+            // Push is just for the immediate OS banner/sound.
             await Supabase.instance.client.functions.invoke('send-push', body: {
               'kind': 'location_off_alert',
               'user_id': userId,
+              'user_name': userName,
+              'user_phone': userPhone,
             });
           }
         } catch (e) {
@@ -124,7 +142,7 @@ void onStart(ServiceInstance service) async {
       }
       return;
     }
-
+    
     // GPS is back on — reset the flag so a future off-spell alerts again.
     gpsOffAlertSent = false;
 

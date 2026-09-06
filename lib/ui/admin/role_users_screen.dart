@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'user_tracks_screen.dart';
 import 'live_location_sheet.dart';
+import '../../core/admin_service.dart';
+import 'edit_user_dialog.dart';
 
 class RoleUsersScreen extends StatefulWidget {
   final String role;
@@ -57,6 +59,7 @@ class _RoleUsersScreenState extends State<RoleUsersScreen> {
                         leading: const CircleAvatar(child: Icon(Icons.person)),
                         title: Text(user['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
                         subtitle: Text(user['phone']),
+                        // replace the trailing Row with:
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -67,7 +70,50 @@ class _RoleUsersScreenState extends State<RoleUsersScreen> {
                                 builder: (_) => LiveLocationSheet(userId: user['id'], userName: user['name']),
                               ),
                             ),
-                            const Icon(Icons.chevron_right),
+                            PopupMenuButton<String>(
+                              onSelected: (value) async {
+                                if (value == 'edit') {
+                                  final changed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (_) => EditUserDialog(
+                                      userId: user['id'],
+                                      currentName: user['name'],
+                                      currentRole: user['role'],
+                                    ),
+                                  );
+                                  if (changed == true) setState(() {}); // refresh the list
+                                }
+
+                                if (value == 'delete') {
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (_) => AlertDialog(
+                                      title: const Text('Delete Personnel'),
+                                      content: Text(
+                                        'This will permanently delete ${user['name']} and all their tracks, sessions, and notifications. This cannot be undone.',
+                                      ),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                                        ElevatedButton(
+                                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                          onPressed: () => Navigator.pop(context, true),
+                                          child: const Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  if (confirmed == true) {
+                                    await AdminService.deleteUserCascade(user['id']);
+                                    setState(() {});
+                                  }
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            ),
                           ],
                         ),
                         onTap: () => Navigator.push(context, MaterialPageRoute(

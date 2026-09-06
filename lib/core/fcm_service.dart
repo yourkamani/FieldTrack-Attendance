@@ -12,13 +12,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     url: 'https://tmoacgbszammuasaxapo.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtb2FjZ2JzemFtbXVhc2F4YXBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTg1MzgsImV4cCI6MjEwMjM3NDUzOH0.NJxYtAyRXPMi8P7H-sClCOpWcBIhqGwz-6TvastkeUw',
   );
-
-  if (message.data['type'] == 'location_off_alert') {
-    await FcmService.showLocalNotification(
-      'Location Off',
-      'A user turned off their location.',
-    );
-  }
 }
 
 class FcmService {
@@ -44,9 +37,10 @@ class FcmService {
     });
 
     // Foreground messages: admin's app is open when the alert arrives.
-    FirebaseMessaging.onMessage.listen((message) {
+    FirebaseMessaging.onMessage.listen((message) async {
       if (message.data['type'] == 'location_off_alert') {
-        showLocalNotification('Location Off', 'A user turned off their location.');
+        final name = message.data['user_name'] ?? 'A user';
+        await FcmService.showLocalNotification('Location Off', '$name turned off their location.');
       }
     });
   }
@@ -67,7 +61,7 @@ class FcmService {
       importance: Importance.high,
       priority: Priority.high,
     );
-    
+
     await _localNotifications.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,

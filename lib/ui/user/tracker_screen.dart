@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/sync_service.dart';
 import '../../core/database_helper.dart';
 import '../../core/selfie_service.dart';
+import 'location_disclosure_screen.dart';
 
 class TrackerScreen extends StatefulWidget {
   const TrackerScreen({Key? key}) : super(key: key);
@@ -82,6 +83,14 @@ class _TrackerScreenState extends State<TrackerScreen> {
   // -------------------------------------------------------------------
   Future<void> _startTracking() async {
     final service = FlutterBackgroundService();
+
+    final proceed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationDisclosureScreen(onContinue: () => Navigator.pop(context, true)),
+      ),
+    );
+    if (proceed != true) return;
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
