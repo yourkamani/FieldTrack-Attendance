@@ -102,11 +102,21 @@ class SyncService {
 
   Future<String> _uploadSelfie(String userId, String sessionId, String type, String localPath) async {
     final storagePath = '$userId/${sessionId}_$type.jpg';
-    await _supabase.storage.from('selfies').upload(
-          storagePath,
-          File(localPath),
-          fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
-        );
+    try {
+      await _supabase.storage.from('selfies').upload(
+        storagePath,
+        File(localPath),
+        fileOptions: const FileOptions(contentType: 'image/jpeg'), // no upsert
+      );
+    } on StorageException catch (e) {
+      final alreadyExists = e.statusCode == '409' ||
+          e.message.toLowerCase().contains('already exists') ||
+          e.message.toLowerCase().contains('duplicate');
+      if (alreadyExists) {
+        return storagePath; // previously uploaded successfully — nothing to do
+      }
+      rethrow;
+    }
     return storagePath;
   }
 }
