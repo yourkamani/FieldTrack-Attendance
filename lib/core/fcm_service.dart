@@ -2,15 +2,11 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// Must be a top-level function (not a class method) and carry this
-/// annotation, or Android won't be able to invoke it when the app
-/// is fully killed.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // A new isolate — Supabase needs re-init here.
   await Supabase.initialize(
-    url: 'https://tmoacgbszammuasaxapo.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtb2FjZ2JzemFtbXVhc2F4YXBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTg1MzgsImV4cCI6MjEwMjM3NDUzOH0.NJxYtAyRXPMi8P7H-sClCOpWcBIhqGwz-6TvastkeUw',
+    url: 'https://ctfhrpohgqqvbdxglebw.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0ZmhycG9oZ3FxdmJkeGdsZWJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxNjA5MDMsImV4cCI6MjEwNTczNjkwM30.k-kGhWvH3k1Iet6cR6zrn7kUbuGnGaYP64KLMMAkLb8',
   );
 }
 
@@ -19,49 +15,37 @@ class FcmService {
   static final _supabase = Supabase.instance.client;
   static final _localNotifications = FlutterLocalNotificationsPlugin();
 
-  /// Call once after any successful login (user or admin).
   static Future<void> init({
-    required String ownerType, // 'user' | 'admin'
+    required String ownerType,
     required String ownerId,
+    required String businessId,
   }) async {
     await _messaging.requestPermission(alert: true, badge: true, sound: true);
-
     final token = await _messaging.getToken();
-    if (token != null) {
-      await _saveToken(ownerType, ownerId, token);
-    }
+    if (token != null) await _saveToken(ownerType, ownerId, businessId, token);
 
-    // Token can rotate; keep it fresh.
-    _messaging.onTokenRefresh.listen((newToken) {
-      _saveToken(ownerType, ownerId, newToken);
-    });
+    _messaging.onTokenRefresh.listen((newToken) => _saveToken(ownerType, ownerId, businessId, newToken));
 
-    // Foreground messages: admin's app is open when the alert arrives.
     FirebaseMessaging.onMessage.listen((message) async {
       if (message.data['type'] == 'location_off_alert') {
         final name = message.data['user_name'] ?? 'A user';
-        await FcmService.showLocalNotification('Location Off', '$name turned off their location.');
+        await showLocalNotification('Location Off', '$name turned off their location.');
       }
     });
   }
 
-  static Future<void> _saveToken(String ownerType, String ownerId, String token) async {
+  static Future<void> _saveToken(String ownerType, String ownerId, String businessId, String token) async {
     await _supabase.from('device_tokens').upsert({
       'owner_type': ownerType,
       'owner_id': ownerId,
+      'business_id': businessId,
       'fcm_token': token,
       'updated_at': DateTime.now().toIso8601String(),
     }, onConflict: 'owner_type,owner_id');
   }
 
   static Future<void> showLocalNotification(String title, String body) async {
-    const androidDetails = AndroidNotificationDetails(
-      'alerts',
-      'Alerts',
-      importance: Importance.high,
-      priority: Priority.high,
-    );
-
+    const androidDetails = AndroidNotificationDetails('alerts', 'Alerts', importance: Importance.high, priority: Priority.high);
     await _localNotifications.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,

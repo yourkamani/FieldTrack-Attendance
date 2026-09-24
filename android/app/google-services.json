@@ -1,32 +1,13 @@
 {
   "project_info": {
-    "project_number": "99666672265",
-    "project_id": "attendancetracker-b9d2a",
-    "storage_bucket": "attendancetracker-b9d2a.firebasestorage.app"
+    "project_number": "234756730500",
+    "project_id": "attendance-tracker-aeaf1",
+    "storage_bucket": "attendance-tracker-aeaf1.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:99666672265:android:faeb8053b454c9b82a6458",
-        "android_client_info": {
-          "package_name": "com.example.attendance_tracker"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyDr1tCdCg7WMKt6j0k_SM_4a-HWD-4GhEQ"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:99666672265:android:a12ec3493df773e42a6458",
+        "mobilesdk_app_id": "1:234756730500:android:686af6e4fdf8085da41cd1",
         "android_client_info": {
           "package_name": "com.krish.attendancetracker"
         }
@@ -34,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDr1tCdCg7WMKt6j0k_SM_4a-HWD-4GhEQ"
+          "current_key": "AIzaSyB-8izTRu5urARmiScoXBhvqHdQTZOoz3o"
         }
       ],
       "services": {

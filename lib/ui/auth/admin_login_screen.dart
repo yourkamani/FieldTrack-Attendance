@@ -37,8 +37,8 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         await prefs.setString('user_id', adminRow?['id'] ?? authResponse.user!.id);
         await prefs.setString('role', 'admin');
 
-        FcmService.init(ownerType: 'admin', ownerId: adminRow?['id'] ?? authResponse.user!.id)
-            .catchError((e) => debugPrint('FCM init failed: $e'));
+        // FcmService.init(ownerType: 'admin', ownerId: adminRow?['id'] ?? authResponse.user!.id)
+        //     .catchError((e) => debugPrint('FCM init failed: $e'));
 
         Navigator.pushAndRemoveUntil(
           context,

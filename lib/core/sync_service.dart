@@ -8,9 +8,7 @@ class SyncService {
 
   void startListening() {
     InternetConnectionChecker.instance.onStatusChange.listen((status) {
-      if (status == InternetConnectionStatus.connected) {
-        syncOfflineData();
-      }
+      if (status == InternetConnectionStatus.connected) syncOfflineData();
     });
   }
 
@@ -19,9 +17,6 @@ class SyncService {
     await _syncSessions();
   }
 
-  // -------------------------------------------------------------------
-  // LOCATIONS (unchanged)
-  // -------------------------------------------------------------------
   Future<void> _syncLocations() async {
     final offlineLocations = await DatabaseHelper.instance.getUnsyncedLocations();
     if (offlineLocations.isEmpty) return;
@@ -32,11 +27,8 @@ class SyncService {
     for (var loc in offlineLocations) {
       syncedIds.add(loc['id']);
       uploadBatch.add({
-        'user_id': loc['user_id'],
-        'session_id': loc['session_id'],
-        'latitude': loc['lat'],
-        'longitude': loc['lng'],
-        'timestamp': loc['timestamp'],
+        'user_id': loc['user_id'], 'business_id': loc['business_id'], 'session_id': loc['session_id'],
+        'latitude': loc['lat'], 'longitude': loc['lng'], 'timestamp': loc['timestamp'],
       });
     }
 
@@ -48,15 +40,13 @@ class SyncService {
     }
   }
 
-  // -------------------------------------------------------------------
-  // SESSIONS + SELFIES
-  // -------------------------------------------------------------------
   Future<void> _syncSessions() async {
     final pending = await DatabaseHelper.instance.getUnsyncedSessions();
 
     for (final session in pending) {
       final sessionId = session['session_id'] as String;
       final userId = session['user_id'] as String;
+      final businessId = session['business_id'] as String?;
 
       try {
         String? startStoragePath;
@@ -66,34 +56,24 @@ class SyncService {
         if (startPath != null && File(startPath).existsSync()) {
           startStoragePath = await _uploadSelfie(userId, sessionId, 'start', startPath);
         }
-
         final stopPath = session['stop_selfie_path'] as String?;
         if (stopPath != null && File(stopPath).existsSync()) {
           stopStoragePath = await _uploadSelfie(userId, sessionId, 'stop', stopPath);
         }
 
         await _supabase.from('sessions').upsert({
-          'session_id': sessionId,
-          'user_id': userId,
-          'start_time': session['start_time'],
-          'end_time': session['end_time'],
-          // We store the storage PATH, not a public URL — the admin
-          // screen requests a short-lived signed URL only when actually
-          // viewing a selfie, since the bucket is private.
-          'start_selfie_path': startStoragePath,
-          'stop_selfie_path': stopStoragePath,
+          'session_id': sessionId, 'user_id': userId, 'business_id': businessId,
+          'start_time': session['start_time'], 'end_time': session['end_time'],
+          'start_selfie_path': startStoragePath, 'stop_selfie_path': stopStoragePath,
           'auto_stopped': session['auto_stopped'] == 1,
         }, onConflict: 'session_id');
 
         final isComplete = session['end_time'] != null;
         if (isComplete) {
           await DatabaseHelper.instance.markSessionSynced(sessionId);
-          // Free device storage now that originals are safely uploaded.
           if (startPath != null) await File(startPath).delete().catchError((_) => File(startPath));
           if (stopPath != null) await File(stopPath).delete().catchError((_) => File(stopPath));
         }
-        // If the session is still active (end_time null), we leave it
-        // unsynced so the next sync pass picks up the eventual stop info.
       } catch (e) {
         print("Session sync failed for $sessionId: $e");
       }
@@ -103,18 +83,11 @@ class SyncService {
   Future<String> _uploadSelfie(String userId, String sessionId, String type, String localPath) async {
     final storagePath = '$userId/${sessionId}_$type.jpg';
     try {
-      await _supabase.storage.from('selfies').upload(
-        storagePath,
-        File(localPath),
-        fileOptions: const FileOptions(contentType: 'image/jpeg'), // no upsert
-      );
+      await _supabase.storage.from('selfies').upload(storagePath, File(localPath),
+          fileOptions: const FileOptions(contentType: 'image/jpeg'));
     } on StorageException catch (e) {
-      final alreadyExists = e.statusCode == '409' ||
-          e.message.toLowerCase().contains('already exists') ||
-          e.message.toLowerCase().contains('duplicate');
-      if (alreadyExists) {
-        return storagePath; // previously uploaded successfully — nothing to do
-      }
+      final exists = e.statusCode == '409' || e.message.toLowerCase().contains('already exists') || e.message.toLowerCase().contains('duplicate');
+      if (exists) return storagePath;
       rethrow;
     }
     return storagePath;
