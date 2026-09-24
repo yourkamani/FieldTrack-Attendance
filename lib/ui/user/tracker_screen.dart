@@ -7,6 +7,7 @@ import '../../core/sync_service.dart';
 import '../../core/database_helper.dart';
 import '../../core/selfie_service.dart';
 import 'location_disclosure_screen.dart';
+import '../shared/profile_screen.dart';
 
 class TrackerScreen extends StatefulWidget {
   const TrackerScreen({Key? key}) : super(key: key);
@@ -84,13 +85,19 @@ class _TrackerScreenState extends State<TrackerScreen> {
   Future<void> _startTracking() async {
     final service = FlutterBackgroundService();
 
-    final proceed = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => LocationDisclosureScreen(onContinue: () => Navigator.pop(context, true)),
-      ),
-    );
-    if (proceed != true) return;
+    final prefs = await SharedPreferences.getInstance();
+    final alreadyDisclosed = prefs.getBool('location_disclosure_shown') ?? false;
+
+    if (!alreadyDisclosed) {
+      final proceed = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LocationDisclosureScreen(onContinue: () => Navigator.pop(context, true)),
+        ),
+      );
+      if (proceed != true) return;
+      await prefs.setBool('location_disclosure_shown', true);
+    }
 
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -146,7 +153,6 @@ class _TrackerScreenState extends State<TrackerScreen> {
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('user_id') ?? '';
 
     await DatabaseHelper.instance.insertSessionStart({
@@ -222,7 +228,15 @@ class _TrackerScreenState extends State<TrackerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Tracker')),
+      appBar: AppBar(
+        title: const Text('My Tracker'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen(isAdmin: false))),
+          ),
+        ],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

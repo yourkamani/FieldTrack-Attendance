@@ -14,7 +14,7 @@ class RegisterDetailsScreen extends StatefulWidget {
 
 class _RegisterDetailsScreenState extends State<RegisterDetailsScreen> {
   final nameCtrl = TextEditingController();
-  String role = 'driver';
+  String? role;
   bool loading = false;
   final roles = ['driver', 'master', 'blaster', 'operator'];
 
@@ -63,18 +63,27 @@ class _RegisterDetailsScreenState extends State<RegisterDetailsScreen> {
           children: [
             TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder())),
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: role,
-              decoration: const InputDecoration(labelText: 'Select Role', border: OutlineInputBorder()),
-              items: roles.map((r) => DropdownMenuItem(value: r, child: Text(r.toUpperCase()))).toList(),
-              onChanged: (val) => setState(() => role = val!),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: SB.client.from('roles').select().eq('business_id', widget.businessId).order('name'),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const CircularProgressIndicator();
+                final roles = snapshot.data!.map((r) => r['name'] as String).toList();
+                role ??= roles.isNotEmpty ? roles.first : null;
+
+                return DropdownButtonFormField<String>(
+                  value: role,
+                  decoration: const InputDecoration(labelText: 'Select Role', border: OutlineInputBorder()),
+                  items: roles.map((r) => DropdownMenuItem(value: r, child: Text(r.toUpperCase()))).toList(),
+                  onChanged: (val) => setState(() => role = val),
+                );
+              },
             ),
             const SizedBox(height: 30),
             loading
                 ? const CircularProgressIndicator()
                 : ElevatedButton(
                     style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-                    onPressed: _register,
+                    onPressed: role == null ? null : _register,
                     child: const Text('REGISTER'),
                   ),
           ],

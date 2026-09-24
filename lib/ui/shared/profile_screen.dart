@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/supabase_client.dart';
-import '../../core/auth/supabase_email_admin_auth_provider.dart';
+import '../../core/auth/supabase_otp_admin_auth_provider.dart';
 import '../auth/login_screen.dart';
 import '../admin/admin_login_screen.dart';
 
@@ -44,12 +44,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     if (widget.isAdmin) {
-      await SupabaseEmailAdminAuthProvider().signOut();
+      await SupabaseOtpAdminAuthProvider().signOut(); // was SupabaseEmailAdminAuthProvider()
       await prefs.clear();
     } else {
       await prefs.remove('user_id');
       await prefs.remove('role');
-      // business_id intentionally kept — no invite code needed on next login
     }
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(context,
