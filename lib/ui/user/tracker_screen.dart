@@ -153,16 +153,18 @@ class _TrackerScreenState extends State<TrackerScreen> {
       return;
     }
 
-    final userId = prefs.getString('user_id') ?? '';
+  final userId = prefs.getString('user_id') ?? '';
+  final businessId = prefs.getString('business_id') ?? '';
 
-    await DatabaseHelper.instance.insertSessionStart({
-      'session_id': sessionId,
-      'user_id': userId,
-      'start_time': startTime.toIso8601String(),
-      'start_selfie_path': selfiePath,
-      'auto_stopped': 0,
-      'synced': 0,
-    });
+  await DatabaseHelper.instance.insertSessionStart({
+    'session_id': sessionId,
+    'user_id': userId,
+    'business_id': businessId,
+    'start_time': startTime.toIso8601String(),
+    'start_selfie_path': selfiePath,
+    'auto_stopped': 0,
+    'synced': 0,
+  });
 
     // The background service reads these to keep using the SAME
     // session_id/start_time as this screen (and to know when 12h is up).

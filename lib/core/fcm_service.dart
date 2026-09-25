@@ -35,13 +35,9 @@ class FcmService {
   }
 
   static Future<void> _saveToken(String ownerType, String ownerId, String businessId, String token) async {
-    await _supabase.from('device_tokens').upsert({
-      'owner_type': ownerType,
-      'owner_id': ownerId,
-      'business_id': businessId,
-      'fcm_token': token,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'owner_type,owner_id');
+    await _supabase.rpc('upsert_device_token', params: {
+      'p_owner_type': ownerType, 'p_owner_id': ownerId, 'p_business_id': businessId, 'p_fcm_token': token,
+    });
   }
 
   static Future<void> showLocalNotification(String title, String body) async {

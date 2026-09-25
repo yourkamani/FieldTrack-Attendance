@@ -1,7 +1,5 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth/admin_auth_provider.dart';
 import '../../core/auth/supabase_otp_admin_auth_provider.dart';
 import '../../core/fcm_service.dart';
@@ -19,35 +17,6 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final emailCtrl = TextEditingController();
   final passwordCtrl = TextEditingController();
   bool loading = false;
-  StreamSubscription<AuthState>? _authSub;
-  bool _handledSignIn = false; // guards against a stray duplicate event
-
-  @override
-  void initState() {
-    super.initState();
-    _authSub = _auth.authStateChanges.listen((state) async {
-      if (state.event == AuthChangeEvent.signedIn && !_handledSignIn) {
-        _handledSignIn = true;
-        await _authSub?.cancel(); // stop listening — this screen's job is done
-        final result = await _auth.resolveAdminForCurrentSession();
-        if (result != null) {
-          await _finishLogin(result);
-        } else if (mounted) {
-          final businessName = await _promptBusinessName();
-          if (businessName != null) {
-            final created = await _auth.createBusinessForCurrentSession(businessName);
-            await _finishLogin(created);
-          }
-        }
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _authSub?.cancel();
-    super.dispose();
-  }
 
   Future<String?> _promptBusinessName() {
     final ctrl = TextEditingController();
@@ -79,11 +48,23 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   Future<void> _signInWithGoogle() async {
     setState(() => loading = true);
     try {
-      await _auth.signInWithGoogle();
+      final outcome = await _auth.signInWithGoogle();
+
+      if (outcome.existingAdmin != null) {
+        await _finishLogin(outcome.existingAdmin!);
+      } else if (mounted) {
+        final businessName = await _promptBusinessName();
+        if (businessName != null && businessName.isNotEmpty) {
+          final created = await _auth.createBusinessForCurrentSession(businessName, outcome.displayName);
+          await _finishLogin(created);
+        } else {
+          await _auth.signOut();
+        }
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      if (mounted) setState(() => loading = false);
     }
+    if (mounted) setState(() => loading = false);
   }
 
   Future<void> _finishLogin(AdminAuthResult result) async {
@@ -132,12 +113,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               label: const Text('Sign in with Google'),
             ),
             TextButton(
-              onPressed: () async {
-                await _authSub?.cancel(); // stop listening before another screen can also react to auth events
-                if (mounted) {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminSignupScreen()));
-                }
-              },
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminSignupScreen())),
               child: const Text('New business? Sign up'),
             ),
           ],

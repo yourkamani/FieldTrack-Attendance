@@ -61,12 +61,12 @@ class SyncService {
           stopStoragePath = await _uploadSelfie(userId, sessionId, 'stop', stopPath);
         }
 
-        await _supabase.from('sessions').upsert({
-          'session_id': sessionId, 'user_id': userId, 'business_id': businessId,
-          'start_time': session['start_time'], 'end_time': session['end_time'],
-          'start_selfie_path': startStoragePath, 'stop_selfie_path': stopStoragePath,
-          'auto_stopped': session['auto_stopped'] == 1,
-        }, onConflict: 'session_id');
+        await _supabase.rpc('upsert_session', params: {
+          'p_session_id': sessionId, 'p_user_id': userId, 'p_business_id': businessId,
+          'p_start_time': session['start_time'], 'p_end_time': session['end_time'],
+          'p_start_selfie_path': startStoragePath, 'p_stop_selfie_path': stopStoragePath,
+          'p_auto_stopped': session['auto_stopped'] == 1,
+        });
 
         final isComplete = session['end_time'] != null;
         if (isComplete) {

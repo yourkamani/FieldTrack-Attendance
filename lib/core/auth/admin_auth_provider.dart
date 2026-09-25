@@ -1,5 +1,12 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+class GoogleSignInOutcome {
+  final AdminAuthResult? existingAdmin; // non-null = returning admin, straight to dashboard
+  final String email;
+  final String displayName;
+  GoogleSignInOutcome({this.existingAdmin, required this.email, required this.displayName});
+}
+
 abstract class AdminAuthProvider {
   /// Starts signup — Supabase sends a confirmation OTP to this email.
   /// No session/account is usable yet until confirmSignup succeeds.
@@ -15,13 +22,14 @@ abstract class AdminAuthProvider {
   /// Everyday login — no OTP involved.
   Future<AdminAuthResult> signIn({required String email, required String password});
 
-  Future<void> signInWithGoogle();
-  Stream<AuthState> get authStateChanges;
+  /// Returns the resolved admin directly, or null on first-time sign-in
+  /// with no business yet — no stream/redirect involved with the native
+  /// google_sign_in flow.
+  Future<GoogleSignInOutcome> signInWithGoogle(); // replaces the old nullable-AdminAuthResult version
 
-  /// Used after a Google redirect completes — null means first-time
-  /// Google sign-in with no business yet.
+  Stream<AuthState> get authStateChanges;
   Future<AdminAuthResult?> resolveAdminForCurrentSession();
-  Future<AdminAuthResult> createBusinessForCurrentSession(String businessName);
+  Future<AdminAuthResult> createBusinessForCurrentSession(String businessName, String adminName);
 
   Future<void> signOut();
 }

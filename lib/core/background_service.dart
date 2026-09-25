@@ -67,10 +67,10 @@ void onStart(ServiceInstance service) async {
       }
       if (hasInternet) {
         try {
-          await Supabase.instance.client.from('live_locations').upsert({
-            'user_id': userId, 'business_id': businessId, 'gps_enabled': false,
-            'updated_at': DateTime.now().toIso8601String(),
-          }, onConflict: 'user_id');
+          await Supabase.instance.client.rpc('upsert_live_location', params: {
+            'p_user_id': userId, 'p_business_id': businessId,
+            'p_latitude': null, 'p_longitude': null, 'p_gps_enabled': false,
+          });
 
           if (!gpsOffAlertSent) {
             gpsOffAlertSent = true;
@@ -107,11 +107,10 @@ void onStart(ServiceInstance service) async {
 
       if (hasInternet) {
         try {
-          await Supabase.instance.client.from('live_locations').upsert({
-            'user_id': userId, 'business_id': businessId,
-            'latitude': position.latitude, 'longitude': position.longitude,
-            'gps_enabled': true, 'updated_at': DateTime.now().toIso8601String(),
-          }, onConflict: 'user_id');
+          await Supabase.instance.client.rpc('upsert_live_location', params: {
+            'p_user_id': userId, 'p_business_id': businessId,
+            'p_latitude': position.latitude, 'p_longitude': position.longitude, 'p_gps_enabled': true,
+          });
         } catch (e) {
           print('Failed to write live location: $e');
         }
