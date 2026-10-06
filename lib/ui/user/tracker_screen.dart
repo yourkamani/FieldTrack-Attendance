@@ -146,7 +146,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
     final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
     final startTime = DateTime.now();
 
-    final selfiePath = await SelfieService.captureSelfie(sessionId: sessionId, type: 'start');
+    final selfiePath = await SelfieService.captureSelfie(context: context, sessionId: sessionId, type: 'start');
     if (selfiePath == null) {
       setState(() => _busy = false);
       _showSnack('A selfie is required to start tracking.');
@@ -202,7 +202,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
 
     setState(() => _busy = true);
 
-    final selfiePath = await SelfieService.captureSelfie(sessionId: sessionId, type: 'stop');
+    final selfiePath = await SelfieService.captureSelfie(context: context, sessionId: sessionId, type: 'stop');
     if (selfiePath == null) {
       setState(() => _busy = false);
       _showSnack('A selfie is required to stop tracking. Please try again.');

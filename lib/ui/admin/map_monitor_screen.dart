@@ -7,6 +7,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/geocoding_service.dart';
+
 import '../../models/track_models.dart';
 import '../../widgets/marker_icon_factory.dart';
 import '../../widgets/route_narrative.dart';
@@ -206,15 +208,14 @@ class _MapMonitorScreenState extends State<MapMonitorScreen> {
   }
 
   Future<void> _resolveOne(AreaResolvable item, LatLng location) async {
-    if (_googleApiKey.isEmpty) {
-      item.areaName = 'Set GOOGLE_MAPS_API_KEY in .env';
-      if (mounted) setState(() {});
-      return;
-    }
     item.isResolvingArea = true;
     if (mounted) setState(() {});
 
-    item.areaName = await _reverseGeocode(location) ?? 'Unknown area';
+    try {
+      item.areaName = await GeocodingService.reverseGeocode(location.latitude, location.longitude);
+    } catch (e) {
+      item.areaName = 'Unknown area';
+    }
     item.isResolvingArea = false;
     if (mounted) setState(() {});
   }

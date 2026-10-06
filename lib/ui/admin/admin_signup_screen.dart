@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/auth/admin_auth_provider.dart';
@@ -21,6 +22,28 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
   final otpCtrl = TextEditingController();
   _Stage stage = _Stage.details;
   bool loading = false;
+  bool resending = false;
+  int _resendCooldown = 0;
+  Timer? _cooldownTimer;
+
+  @override
+  void dispose() {
+    _cooldownTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startCooldown() {
+    setState(() => _resendCooldown = 30);
+    _cooldownTimer?.cancel();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_resendCooldown <= 1) {
+        timer.cancel();
+        setState(() => _resendCooldown = 0);
+      } else {
+        setState(() => _resendCooldown--);
+      }
+    });
+  }
 
   Future<void> _submitDetails() async {
     if (emailCtrl.text.trim().isEmpty || passwordCtrl.text.isEmpty || businessNameCtrl.text.trim().isEmpty) return;
@@ -28,10 +51,24 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
     try {
       await _auth.signUp(email: emailCtrl.text.trim(), password: passwordCtrl.text);
       setState(() => stage = _Stage.otp);
+      _startCooldown();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     if (mounted) setState(() => loading = false);
+  }
+
+  Future<void> _resendOtp() async {
+    if (_resendCooldown > 0) return;
+    setState(() => resending = true);
+    try {
+      await _auth.signUp(email: emailCtrl.text.trim(), password: passwordCtrl.text); // re-sends a fresh code
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('New code sent')));
+      _startCooldown();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+    if (mounted) setState(() => resending = false);
   }
 
   Future<void> _confirm() async {
@@ -101,6 +138,13 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
                       onPressed: _confirm,
                       child: const Text('VERIFY & CREATE BUSINESS'),
                     ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: (resending || _resendCooldown > 0) ? null : _resendOtp,
+                child: resending
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : Text(_resendCooldown > 0 ? 'Resend code (${_resendCooldown}s)' : 'Resend code'),
+              ),
             ],
           ],
         ),
