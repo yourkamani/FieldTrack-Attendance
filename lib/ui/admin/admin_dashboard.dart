@@ -6,6 +6,7 @@ import 'notifications_screen.dart';
 import '../shared/profile_screen.dart';
 import 'invite_codes_screen.dart';
 import 'data_retention_screen.dart';
+import 'live_map_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({Key? key}) : super(key: key);
@@ -99,6 +100,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
             icon: const Icon(Icons.person_outline),
             tooltip: 'Profile',
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen(isAdmin: true))),
+          ),
+          IconButton(
+            icon: const Icon(Icons.map_outlined),
+            tooltip: 'Live Map',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveMapScreen())),
           ),
           IconButton(
             icon: const Icon(Icons.vpn_key_outlined),

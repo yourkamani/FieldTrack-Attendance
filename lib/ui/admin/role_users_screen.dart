@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/supabase_client.dart';
 import '../../core/admin_service.dart';
 import 'user_tracks_screen.dart';
-import 'live_location_sheet.dart';
+import 'live_map_screen.dart';
 import 'edit_user_dialog.dart';
 
 class RoleUsersScreen extends StatefulWidget {
@@ -92,8 +92,9 @@ class _RoleUsersScreenState extends State<RoleUsersScreen> {
                           trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                             IconButton(
                               icon: const Icon(Icons.my_location, color: Colors.blue),
-                              onPressed: () => showModalBottomSheet(context: context,
-                                builder: (_) => LiveLocationSheet(userId: user['id'], userName: user['name'])),
+                              tooltip: 'Live location',
+                              onPressed: () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => LiveMapScreen(focusUserId: user['id']))),
                             ),
                             PopupMenuButton<String>(
                               onSelected: (value) async {
