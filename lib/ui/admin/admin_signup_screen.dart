@@ -20,6 +20,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
   final passwordCtrl = TextEditingController();
   final businessNameCtrl = TextEditingController();
   final otpCtrl = TextEditingController();
+  final inviteCtrl = TextEditingController();
   _Stage stage = _Stage.details;
   bool loading = false;
   bool resending = false;
@@ -29,6 +30,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
   @override
   void dispose() {
     _cooldownTimer?.cancel();
+    inviteCtrl.dispose();
     super.dispose();
   }
 
@@ -46,7 +48,9 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
   }
 
   Future<void> _submitDetails() async {
-    if (emailCtrl.text.trim().isEmpty || passwordCtrl.text.isEmpty || businessNameCtrl.text.trim().isEmpty) return;
+    final joining = inviteCtrl.text.trim().isNotEmpty;
+    if (emailCtrl.text.trim().isEmpty || passwordCtrl.text.isEmpty) return;
+    if (!joining && businessNameCtrl.text.trim().isEmpty) return;
     setState(() => loading = true);
     try {
       await _auth.signUp(email: emailCtrl.text.trim(), password: passwordCtrl.text);
@@ -79,6 +83,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
         email: emailCtrl.text.trim(),
         otp: otpCtrl.text.trim(),
         businessName: businessNameCtrl.text.trim(),
+        adminInviteCode: inviteCtrl.text.trim(),
       );
 
       final prefs = await SharedPreferences.getInstance();
@@ -109,7 +114,12 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
           children: [
             if (stage == _Stage.details) ...[
               TextField(controller: businessNameCtrl,
-                decoration: const InputDecoration(labelText: 'Business Name', border: OutlineInputBorder())),
+                decoration: const InputDecoration(labelText: 'Business Name (new business)', border: OutlineInputBorder())),
+              const SizedBox(height: 8),
+              const Text('— or join an existing business —', style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 8),
+              TextField(controller: inviteCtrl, textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Admin invite code (optional)', border: OutlineInputBorder())),
               const SizedBox(height: 15),
               TextField(controller: emailCtrl, keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder())),
@@ -136,7 +146,7 @@ class _AdminSignupScreenState extends State<AdminSignupScreen> {
                   : ElevatedButton(
                       style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
                       onPressed: _confirm,
-                      child: const Text('VERIFY & CREATE BUSINESS'),
+                      child: Text(inviteCtrl.text.trim().isNotEmpty ? 'VERIFY & JOIN BUSINESS' : 'VERIFY & CREATE BUSINESS'),
                     ),
               const SizedBox(height: 12),
               TextButton(

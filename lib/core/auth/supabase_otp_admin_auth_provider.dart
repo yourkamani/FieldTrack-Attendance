@@ -1,6 +1,7 @@
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../supabase_client.dart';
+import '../invite_service.dart';
 import 'admin_auth_provider.dart';
 
 class SupabaseOtpAdminAuthProvider implements AdminAuthProvider {
@@ -23,10 +24,16 @@ class SupabaseOtpAdminAuthProvider implements AdminAuthProvider {
   Future<AdminAuthResult> confirmSignup({
     required String email,
     required String otp,
-    required String businessName,
+    String? businessName,
+    String? adminInviteCode,
   }) async {
     final res = await SB.client.auth.verifyOTP(email: email, token: otp, type: OtpType.signup);
     if (res.user == null) throw Exception('Invalid or expired code');
+
+    if (adminInviteCode != null && adminInviteCode.trim().isNotEmpty) {
+      final joined = await InviteService.redeemAdminInvite(adminInviteCode, name: email.split('@').first);
+      return AdminAuthResult(adminId: joined['admin_id'], businessId: joined['business_id'], email: email);
+    }
 
     final result = await SB.client
         .rpc('create_business_and_admin', params: {'business_name': businessName})
@@ -99,6 +106,14 @@ class SupabaseOtpAdminAuthProvider implements AdminAuthProvider {
     }).single();
 
     return AdminAuthResult(adminId: result['admin_id'], businessId: result['business_id'], email: user.email ?? '');
+  }
+
+  @override
+  Future<AdminAuthResult> joinBusinessForCurrentSession(String inviteCode, String adminName) async {
+    final user = SB.client.auth.currentUser;
+    if (user == null) throw Exception('No active session');
+    final joined = await InviteService.redeemAdminInvite(inviteCode, name: adminName);
+    return AdminAuthResult(adminId: joined['admin_id'], businessId: joined['business_id'], email: user.email ?? '');
   }
 
   @override

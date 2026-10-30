@@ -16,7 +16,8 @@ abstract class AdminAuthProvider {
   Future<AdminAuthResult> confirmSignup({
     required String email,
     required String otp,
-    required String businessName,
+    String? businessName,
+    String? adminInviteCode, // if set, joins that business instead of creating one
   });
 
   /// Everyday login — no OTP involved.
@@ -30,6 +31,9 @@ abstract class AdminAuthProvider {
   Stream<AuthState> get authStateChanges;
   Future<AdminAuthResult?> resolveAdminForCurrentSession();
   Future<AdminAuthResult> createBusinessForCurrentSession(String businessName, String adminName);
+
+  /// Signed-in account joins an existing business using an admin invite code.
+  Future<AdminAuthResult> joinBusinessForCurrentSession(String inviteCode, String adminName);
 
   Future<void> signOut();
 }

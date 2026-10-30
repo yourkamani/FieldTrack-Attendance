@@ -18,16 +18,34 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final passwordCtrl = TextEditingController();
   bool loading = false;
 
-  Future<String?> _promptBusinessName() {
-    final ctrl = TextEditingController();
-    return showDialog<String>(
+  /// First-time Google user: create a new business OR join one with an admin code.
+  /// Returns ('create', businessName) or ('join', inviteCode); null = cancelled.
+  Future<(String, String)?> _promptNewAccountChoice() {
+    final nameCtrl = TextEditingController();
+    final codeCtrl = TextEditingController();
+    return showDialog<(String, String)>(
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         title: const Text("You're new here"),
-        content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Business Name')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'New business name')),
+          const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('or', style: TextStyle(color: Colors.grey))),
+          TextField(controller: codeCtrl, textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Admin invite code')),
+        ]),
         actions: [
-          ElevatedButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('Continue')),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              if (codeCtrl.text.trim().isNotEmpty) {
+                Navigator.pop(context, ('join', codeCtrl.text.trim()));
+              } else if (nameCtrl.text.trim().isNotEmpty) {
+                Navigator.pop(context, ('create', nameCtrl.text.trim()));
+              }
+            },
+            child: const Text('Continue'),
+          ),
         ],
       ),
     );
@@ -53,10 +71,12 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       if (outcome.existingAdmin != null) {
         await _finishLogin(outcome.existingAdmin!);
       } else if (mounted) {
-        final businessName = await _promptBusinessName();
-        if (businessName != null && businessName.isNotEmpty) {
-          final created = await _auth.createBusinessForCurrentSession(businessName, outcome.displayName);
-          await _finishLogin(created);
+        final choice = await _promptNewAccountChoice();
+        if (choice != null) {
+          final result = choice.$1 == 'join'
+              ? await _auth.joinBusinessForCurrentSession(choice.$2, outcome.displayName)
+              : await _auth.createBusinessForCurrentSession(choice.$2, outcome.displayName);
+          await _finishLogin(result);
         } else {
           await _auth.signOut();
         }
